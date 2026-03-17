@@ -402,7 +402,8 @@ Build the eval framework in this order — each step unblocks the next and gives
 > ✅ `pipeline/synthesizer.py` — Node 5: persona response + safety disclaimer injection
 > ✅ `pipeline/graph.py` — StateGraph: nodes, conditional routing, checkpointer
 > ✅ `pipeline/agent.py` — entry point: invoke(), get_session_state()
-> ⏳ Qdrant embed running — products.jsonl → Qdrant Cloud
+> ✅ Catalog re-ingested — 32,680 products, 97% activity_tags, fixed subcategories
+> ⏳ Qdrant re-embed running — products.jsonl → Qdrant Cloud
 > ☐ evals/ framework (next build phase)
 
 1. **Intent classification eval** — deterministic, no LLM calls, zero infrastructure needed beyond a labeled JSONL file and sklearn. Gives immediate signal on the most upstream stage.

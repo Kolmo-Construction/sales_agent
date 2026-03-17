@@ -37,10 +37,16 @@ are all meaningless without real product data. The catalog needs:
 >   (`scripts/ingest_catalog.py`) is required before the vector store can be populated.
 > - REI-curated products should take precedence over Amazon records for the same item
 >   (REI descriptions, REI pricing, REI URLs).
-> - The `activity_tags` field will need to be added manually or inferred — Amazon product
->   data does not carry this field in a usable form.
+> - ~~The `activity_tags` field will need to be added manually or inferred~~ — **Resolved:**
+>   `_infer_activity_tags()` in `scripts/ingest_catalog.py` infers tags from subcategory
+>   baseline rules + keyword scan. Coverage: ~97% of products. Remaining 3% have no
+>   recognisable activity signal in name/description.
 > - Spec fields (temperature rating, waterproofing rating, weight) are inconsistently
->   structured in Amazon data and will require extraction/normalization logic.
+>   structured in Amazon data and will require extraction/normalization logic. **Status:**
+>   regex extraction implemented; coverage is thin for some fields (temperature_rating_f: 3%,
+>   fill_power: <1%). Supplement with REI manual products for eval-critical categories.
+> - **Known data gap:** footwear — Amazon Sports & Outdoors source contains only ~17 hiking
+>   boot/shoe records. Footwear evals require manual REI product curation.
 
 ---
 

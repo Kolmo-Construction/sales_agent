@@ -34,11 +34,12 @@ category          subcategory
 sleep             sleeping_bags
                   sleeping_bag_liners
                   sleep_pads
+                  bivys
 footwear          hiking_boots
                   trail_runners
                   mountaineering_boots
                   approach_shoes
-                  sandals
+                  climbing_shoes
 layering          base_layers
                   mid_layers
                   insulated_jackets
@@ -51,16 +52,30 @@ climbing          harnesses
                   ice_axes
                   crampons
                   belay_devices
-navigation        maps
-                  gps_devices
+                  chalk_bags
+                  climbing_shoes
+                  approach_shoes
+navigation        gps_devices
                   compasses
 camping           tents
                   backpacks
                   trekking_poles
                   headlamps
                   water_filters
-other             (catch-all for Amazon records that don't map cleanly)
+                  stoves
+                  tarps
+                  dry_bags
+                  hydration
+                  tools
+                  stuff_sacks
+snow              snowshoes
+                  ski_touring
+                  avalanche_safety
+                  ski_goggles
+                  ski_helmets
 ```
+
+Records that don't map to any known category are dropped at ingest time (not stored).
 
 ---
 
@@ -91,12 +106,24 @@ Activity tags link products to the ontology in `data/ontology/activity_to_specs.
 A product can have multiple tags.
 
 ```
-backpacking           winter_camping        alpine_climbing
-mountaineering        rock_climbing         ice_climbing
-trail_running         hiking                ski_touring
-snowshoeing           whitewater_kayaking   flatwater_kayaking
-canoeing              bikepacking           car_camping
+backpacking           car_camping           winter_camping
+hiking                trekking              trail_running
+mountaineering        alpine_climbing       ice_climbing
+rock_climbing         bouldering            ski_touring
+avalanche_safety      snowshoeing           downhill_skiing
+cross_country_skiing  snowboarding          whitewater_kayaking
+flatwater_kayaking    canoeing              stand_up_paddle_boarding
+surfing               snorkeling            fishing
+bikepacking           mountain_biking       gravel_riding
+road_cycling          road_running          yoga
+general_fitness       wilderness_medicine   navigation_and_orienteering
+outdoor_cooking       trail_maintenance     outdoor_photography
+adventure_travel      hammocking
 ```
+
+Activity tags are inferred at ingest time from subcategory baseline rules + keyword scan
+of product name and description (`scripts/ingest_catalog.py → _infer_activity_tags()`).
+Coverage: ~97% of ingested products have at least one activity tag.
 
 ---
 

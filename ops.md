@@ -106,6 +106,20 @@ python scripts/embed_catalog.py \
 After these two steps, Qdrant holds both dense and sparse vectors for every product
 and the pipeline is ready to serve retrieval queries.
 
+After re-embedding, recreate the payload indexes (required for filtered search):
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import PayloadSchemaType
+client = QdrantClient(url=os.getenv('QDRANT_URL'), api_key=os.getenv('QDRANT_API_KEY'))
+for field, schema in [('category', PayloadSchemaType.KEYWORD),
+                      ('subcategory', PayloadSchemaType.KEYWORD),
+                      ('price_usd', PayloadSchemaType.FLOAT)]:
+    client.create_payload_index('products', field, schema)
+```
+
+**Catalog stats (post-fix):** 32,680 products · 97% activity_tags populated · 7 categories.
+Footwear (17 products) is thin — source data limitation. Supplement with REI manual products.
+
 **Known activities (38 total):** backpacking, winter_camping, alpine_climbing,
 mountaineering, rock_climbing, bouldering, ice_climbing, ski_touring,
 avalanche_safety, snowshoeing, downhill_skiing, cross_country_skiing, snowboarding,
