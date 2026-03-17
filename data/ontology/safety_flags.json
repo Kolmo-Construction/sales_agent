@@ -1,0 +1,240 @@
+{
+  "_schema": {
+    "version": "1.0",
+    "description": "Safety flags for high-risk activities. Used by pipeline/synthesizer.py to inject required disclaimers. Language sourced from REI expert advice articles — see source_urls per entry.",
+    "risk_levels": {
+      "critical": "Life-threatening if improperly equipped or untrained. Hard gate: synthesizer MUST include disclaimer and gear requirements.",
+      "high": "Significant injury risk. Synthesizer MUST include disclaimer.",
+      "moderate": "Meaningful risk with known mitigations. Synthesizer SHOULD include safety note."
+    },
+    "fields": {
+      "risk_level": "critical | high | moderate",
+      "primary_disclaimer": "The exact text that must appear in the recommendation response.",
+      "training_requirement": "Required instruction or certification statement. Include when activity requires professional training.",
+      "required_gear_statements": "Gear items that MUST be mentioned if recommending products for this activity.",
+      "additional_warnings": "Supporting safety points drawn from REI language.",
+      "certifying_bodies": "Professional organizations REI references for this activity.",
+      "source_urls": "REI pages where this language was sourced."
+    }
+  },
+
+  "mountaineering": {
+    "risk_level": "critical",
+    "primary_disclaimer": "Climbing safety is your responsibility. No article or video can replace qualified instruction and experience.",
+    "training_requirement": "REI recommends signing up for classes taught by trained professionals. Consider hiring a guide recognized by the American Mountain Guides Association (AMGA) if you are new to mountaineering.",
+    "required_gear_statements": [
+      "Ice axe and self-arrest skills are required before traveling on snow slopes or glaciers.",
+      "Crevasse rescue skills are required for glacier travel.",
+      "Crampons rated C2 or higher are required for technical terrain."
+    ],
+    "additional_warnings": [
+      "Always leave a trip itinerary with someone at home, including your route, campsite locations, and expected return time.",
+      "Train for a minimum of 16 weeks before your trip depending on your fitness level.",
+      "Before you attempt your own climb, you first need to master technical skills and acquire a sense for how to travel in the mountains."
+    ],
+    "certifying_bodies": ["American Mountain Guides Association (AMGA)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/mountaineering-summit-adventures.html",
+      "https://www.rei.com/learn/expert-advice/how-to-plan-a-mountaineering-trip.html",
+      "https://www.rei.com/learn/expert-advice/mountaineering-gear-essentials.html"
+    ]
+  },
+
+  "alpine_climbing": {
+    "risk_level": "critical",
+    "primary_disclaimer": "Climbing safety is your responsibility. No article or video can replace qualified instruction and experience.",
+    "training_requirement": "REI recommends professional instruction before attempting alpine routes. Find a guide recognized by the American Mountain Guides Association (AMGA).",
+    "required_gear_statements": [
+      "Ice axe, crampons, and self-arrest skills are required.",
+      "Glacier travel requires roped-team skills and crevasse rescue training.",
+      "Helmet is required."
+    ],
+    "additional_warnings": [
+      "Always leave a trip itinerary with someone at home.",
+      "Check weather and route conditions before your climb."
+    ],
+    "certifying_bodies": ["American Mountain Guides Association (AMGA)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/mountaineering-summit-adventures.html",
+      "https://www.rei.com/learn/expert-advice/glacier-and-roped-travel-for-mountaineering.html",
+      "https://www.rei.com/learn/expert-advice/crevasse-rescue-skills.html"
+    ]
+  },
+
+  "ice_climbing": {
+    "risk_level": "critical",
+    "primary_disclaimer": "Climbing safety is your responsibility. No article or video can replace qualified instruction and experience.",
+    "training_requirement": "The first several times you go ice climbing should be on top rope with an experienced guide or mentor — not just a fellow novice. REI recommends finding qualified instruction before leading ice.",
+    "required_gear_statements": [
+      "Technical crampons (C3, step-in binding) are required — general hiking crampons are not sufficient.",
+      "Two technical ice axes are required for vertical ice.",
+      "Helmet with minimal ventilation is required — you will be exposed to falling ice debris.",
+      "Harness, rope, and belay device are required."
+    ],
+    "additional_warnings": [
+      "Expect significant falling debris — choose a helmet designed specifically for this exposure.",
+      "Ice conditions change rapidly with temperature — check conditions before each session."
+    ],
+    "certifying_bodies": ["American Mountain Guides Association (AMGA)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/ice-climbing-waterfalls-alpine-walls.html",
+      "https://www.rei.com/learn/expert-advice/crampons-snow-ice-climbing.html"
+    ]
+  },
+
+  "rock_climbing": {
+    "risk_level": "high",
+    "primary_disclaimer": "Safety is your responsibility. No internet article or video can replace proper instruction and experience.",
+    "training_requirement": "Belaying is a foundational skill that requires instruction from a qualified teacher. REI recommends taking a top-rope climbing course before climbing outdoors.",
+    "required_gear_statements": [
+      "Helmet is mandatory when climbing outdoors.",
+      "Harness and belay device are required.",
+      "Belay certification is required to belay a partner."
+    ],
+    "additional_warnings": [
+      "Always use standard climbing commands — deviation is a safety risk, not a preference.",
+      "Indoor proficiency should be established before moving outdoors.",
+      "Lead climbing requires additional instruction beyond basic top-rope skills."
+    ],
+    "certifying_bodies": ["American Mountain Guides Association (AMGA)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/getting-started-rock-climbing.html",
+      "https://www.rei.com/learn/expert-advice/belay.html",
+      "https://www.rei.com/learn/expert-advice/climbing-helmet.html"
+    ]
+  },
+
+  "ski_touring": {
+    "risk_level": "critical",
+    "primary_disclaimer": "If you want to ski or snowboard in the backcountry, it's crucial that you enroll in avalanche safety training taught by a qualified professional.",
+    "training_requirement": "REI recommends at minimum a Level 1 avalanche course certified by the American Institute for Avalanche Research and Education (AIARE) before heading into the backcountry. Take a free avalanche awareness class first, then pursue formal training.",
+    "required_gear_statements": [
+      "The Big Three are mandatory for every member of your group: avalanche transceiver (beacon), snow probe, and avalanche shovel.",
+      "Carrying avalanche safety gear is useless without the training to use it.",
+      "All members of your group must carry essential avalanche rescue gear and know how to use it."
+    ],
+    "additional_warnings": [
+      "Check the avalanche forecast before every outing — regional backcountry avalanche centers publish daily forecasts.",
+      "Ski one at a time through exposed terrain so someone always has eyes on the group.",
+      "Red flags requiring immediate reassessment: cracking, whoomping sounds, recent avalanche activity, wind loading, and warming temperatures.",
+      "Most avalanche activity starts on slopes between 30 and 45 degrees. Carry an inclinometer.",
+      "Do not blindly follow existing skin tracks without understanding the terrain and hazards.",
+      "Your partner's best chance of survival is rescue within 10 minutes."
+    ],
+    "certifying_bodies": ["American Institute for Avalanche Research and Education (AIARE)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/beginner-s-guide-to-backcountry-skiing-and-snowboarding.html",
+      "https://www.rei.com/learn/expert-advice/avalanche-basics.html",
+      "https://www.rei.com/learn/expert-advice/reducing-avalanche-risk.html",
+      "https://www.rei.com/learn/expert-advice/how-to-read-an-avalanche-forecast.html"
+    ]
+  },
+
+  "snowboarding_backcountry": {
+    "risk_level": "critical",
+    "primary_disclaimer": "It's essential to have proper training and equipment to travel safely if you leave the boundaries of a ski area. Avalanches are a real concern in off-piste terrain.",
+    "training_requirement": "REI recommends at minimum a Level 1 avalanche course certified by AIARE before heading into the backcountry.",
+    "required_gear_statements": [
+      "The must-have gear for every backcountry explorer: avalanche transceiver, snow shovel, and probe. Knowing how to use this gear is equally as important as having it.",
+      "Helmet is required."
+    ],
+    "additional_warnings": [
+      "Check the avalanche forecast before every backcountry session.",
+      "Consider your resort-level ability before transitioning to backcountry terrain.",
+      "Your partner's best chance of survival is rescue within 10 minutes."
+    ],
+    "certifying_bodies": ["American Institute for Avalanche Research and Education (AIARE)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/snowboarding-off-piste.html",
+      "https://www.rei.com/learn/expert-advice/beginner-s-guide-to-backcountry-skiing-and-snowboarding.html"
+    ]
+  },
+
+  "avalanche_safety": {
+    "risk_level": "critical",
+    "primary_disclaimer": "Remember: Safety is your responsibility. Carrying avalanche safety gear is useless without the training to use it.",
+    "training_requirement": "You need to train, practice, and refresh training each year. REI recommends AIARE Level 1 certification for anyone traveling in avalanche terrain.",
+    "required_gear_statements": [
+      "The Big Three are non-negotiable: avalanche transceiver, snow probe, and avalanche shovel.",
+      "Every member of your group must carry all three items and know how to use them."
+    ],
+    "additional_warnings": [
+      "Practice rescue skills every chance you get.",
+      "Your partner's best chance of survival is rescue within 10 minutes — statistically this is the window before survival rates drop sharply.",
+      "After an avalanche: stop and assess further risk, count heads, note the last-seen location of each missing person, call for help immediately."
+    ],
+    "certifying_bodies": ["American Institute for Avalanche Research and Education (AIARE)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/avalanche-basics.html",
+      "https://www.rei.com/learn/expert-advice/avalanche-safety-gear.html",
+      "https://www.rei.com/learn/expert-advice/avalanche-rescue-overview.html"
+    ]
+  },
+
+  "whitewater_kayaking": {
+    "risk_level": "high",
+    "primary_disclaimer": "Always wear a personal flotation device (PFD) and never take it off while on the water. Dress for the water temperature, not the air temperature.",
+    "training_requirement": "For sit-in kayaks, everyone in the group must know how to do a wet exit and at least one person must know how to perform a self-rescue and T-rescue. Take safety courses before trying Class III or above rapids.",
+    "required_gear_statements": [
+      "A properly secured PFD is mandatory — do not step into the boat without it.",
+      "Helmet is required for Class III rapids and above.",
+      "Wetsuit or drysuit is required when water temperature is below 60°F.",
+      "Cold-water immersion effects can occur in water as warm as 70°F — dress accordingly."
+    ],
+    "additional_warnings": [
+      "Never paddle alone — always go with another paddler who can summon help.",
+      "Keep your group within earshot or a whistle blast of one another at all times.",
+      "Check river gauges and weather forecasts before every trip. Scout unfamiliar rapids before running them.",
+      "Risks of cold-water capsizing include immediate lung and heart shock, drowning, and hypothermia.",
+      "Leave a float plan with someone on shore including group names, contact info, and expected return time."
+    ],
+    "certifying_bodies": [],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/kayak-safety.html",
+      "https://www.rei.com/learn/expert-advice/water-safety-guide.html",
+      "https://www.rei.com/learn/expert-advice/paddling-guidelines.html"
+    ]
+  },
+
+  "winter_camping": {
+    "risk_level": "high",
+    "primary_disclaimer": "Frostbite and hypothermia are legitimate concerns while winter camping. You need to actively take care of yourself and your hiking partners.",
+    "training_requirement": "Learn to recognize the early signs of frostbite and hypothermia before your trip. Consider a wilderness first aid course for remote winter travel.",
+    "required_gear_statements": [
+      "A 4-season tent rated for winter conditions is required.",
+      "A sleeping bag rated at least 10°F below the expected overnight low is required — beginners should add additional buffer.",
+      "Two sleeping pads are recommended — insulation from the ground is critical.",
+      "A stove rated for cold temperatures is required."
+    ],
+    "additional_warnings": [
+      "If you feel your fingers or toes getting cold, stop immediately and warm them — do not push on.",
+      "Seek medical treatment immediately if frostbite results in blistering.",
+      "Moderate and severe hypothermia require immediate evacuation.",
+      "Choose a campsite sheltered from wind and free of avalanche danger. Pack down the snow before pitching your tent.",
+      "Always travel with a partner in remote winter conditions."
+    ],
+    "certifying_bodies": [],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/winter-camping.html",
+      "https://www.rei.com/learn/expert-advice/cold-weather-hiking.html"
+    ]
+  },
+
+  "snowshoeing_avalanche_terrain": {
+    "risk_level": "high",
+    "primary_disclaimer": "If you are snowshoeing in avalanche terrain, the same rules apply as backcountry skiing: carry avalanche safety gear and know how to use it.",
+    "training_requirement": "Take an avalanche awareness course before traveling in avalanche terrain on snowshoes.",
+    "required_gear_statements": [
+      "Avalanche transceiver, probe, and shovel are required in avalanche terrain.",
+      "All group members must carry and know how to use the Big Three."
+    ],
+    "additional_warnings": [
+      "Check the avalanche forecast before heading out.",
+      "Stay off steep slopes between 30–45 degrees."
+    ],
+    "certifying_bodies": ["American Institute for Avalanche Research and Education (AIARE)"],
+    "source_urls": [
+      "https://www.rei.com/learn/expert-advice/avalanche-safety-for-snowshoers.html"
+    ]
+  }
+}

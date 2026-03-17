@@ -1,0 +1,792 @@
+{
+  "_schema": {
+    "version": "1.0",
+    "description": "Maps activities to required product specs for catalog retrieval. Used by pipeline/translator.py.",
+    "spec_operators": {
+      "max": "Value must be at most N. Used for temperature ratings (lower = colder = warmer bag).",
+      "min": "Value must be at least N. Used for waterproof ratings, capacity.",
+      "value": "Value must equal exactly this string.",
+      "any_of": "Value must be one of these options.",
+      "preferred": "Prefer these values but do not hard-filter on them."
+    },
+    "modifier_format": "Keys are 'field=value' where field matches an ExtractedContext field name.",
+    "modifier_merge": "Modifiers override base specs for matching keys. Multiple modifiers can apply simultaneously."
+  },
+
+  "backpacking": {
+    "required_categories": ["sleep", "footwear", "layering", "camping"],
+    "base": {
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 20},
+        "insulation_type": {"preferred": ["down", "synthetic"]},
+        "season_rating": {"value": "3-season"},
+        "weight_oz": {"max": 48}
+      },
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "DWR only"]},
+        "sole_stiffness": {"value": "moderate"}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "eVent"]},
+        "waterproof_rating_mm": {"min": 10000}
+      },
+      "backpacks": {
+        "extra": {"capacity_liters": {"min": 50}}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "sleeping_bags": {"temperature_rating_f": {"max": 15}},
+        "hiking_boots": {"sole_stiffness": {"value": "stiff"}}
+      },
+      "experience_level=expert": {
+        "sleeping_bags": {"temperature_rating_f": {"max": 25}, "weight_oz": {"max": 32}}
+      }
+    },
+    "notes": "Weight is critical. Prioritize lightweight options. Ultralight setups suit expert hikers."
+  },
+
+  "winter_camping": {
+    "required_categories": ["sleep", "footwear", "layering", "camping"],
+    "base": {
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 0},
+        "insulation_type": {"preferred": ["down", "synthetic"]},
+        "season_rating": {"value": "4-season"}
+      },
+      "sleep_pads": {
+        "extra": {"r_value": {"min": 4}}
+      },
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "sole_stiffness": {"value": "stiff"},
+        "insulation_type": {"any_of": ["Thinsulate", "PrimaLoft"]}
+      },
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool", "synthetic"]}
+      },
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]},
+        "fill_power": {"min": 600}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "eVent"]},
+        "waterproof_rating_mm": {"min": 20000},
+        "season_rating": {"value": "4-season"}
+      },
+      "tents": {
+        "season_rating": {"value": "4-season"}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "sleeping_bags": {"temperature_rating_f": {"max": -20}},
+        "insulated_jackets": {"fill_power": {"min": 700}}
+      },
+      "experience_level=expert": {
+        "sleeping_bags": {"temperature_rating_f": {"max": 0}}
+      }
+    },
+    "notes": "Two sleeping pads recommended. Stove must be rated for cold temps. Check 4-season tent ratings."
+  },
+
+  "alpine_climbing": {
+    "required_categories": ["footwear", "climbing", "layering"],
+    "base": {
+      "mountaineering_boots": {
+        "crampon_compatible": {"value": "C2"},
+        "sole_stiffness": {"value": "stiff"},
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]}
+      },
+      "crampons": {
+        "extra": {"compatibility": {"value": "C2"}}
+      },
+      "ice_axes": {
+        "extra": {"type": {"value": "walking"}}
+      },
+      "harnesses": {
+        "extra": {"type": {"value": "alpine"}}
+      },
+      "helmets": {},
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]},
+        "fill_power": {"min": 700}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "eVent"]},
+        "waterproof_rating_mm": {"min": 20000}
+      },
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": -10}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "mountaineering_boots": {"crampon_compatible": {"value": "C2"}},
+        "extra_required": ["guide_service_recommended"]
+      },
+      "experience_level=expert": {
+        "mountaineering_boots": {"crampon_compatible": {"value": "C3"}},
+        "crampons": {"extra": {"compatibility": {"value": "C3"}}}
+      }
+    },
+    "notes": "Glacier travel requires rope team skills and crevasse rescue knowledge."
+  },
+
+  "mountaineering": {
+    "required_categories": ["footwear", "climbing", "layering", "sleep"],
+    "base": {
+      "mountaineering_boots": {
+        "crampon_compatible": {"value": "C2"},
+        "sole_stiffness": {"value": "mountaineering"},
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]}
+      },
+      "crampons": {
+        "extra": {"compatibility": {"any_of": ["C2", "C3"]}}
+      },
+      "ice_axes": {
+        "extra": {"type": {"value": "walking"}}
+      },
+      "harnesses": {},
+      "helmets": {},
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": -20}
+      },
+      "insulated_jackets": {
+        "fill_power": {"min": 750}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "eVent"]},
+        "waterproof_rating_mm": {"min": 20000}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "sleeping_bags": {"temperature_rating_f": {"max": -30}}
+      },
+      "experience_level=expert": {
+        "mountaineering_boots": {"crampon_compatible": {"value": "C3"}}
+      }
+    },
+    "notes": "Multi-day glacier travel. Rope skills and crevasse rescue are required before attempting."
+  },
+
+  "rock_climbing": {
+    "required_categories": ["climbing", "layering"],
+    "base": {
+      "harnesses": {},
+      "helmets": {},
+      "ropes": {
+        "extra": {"type": {"value": "dynamic"}, "diameter_mm": {"min": 9.5}}
+      },
+      "carabiners": {},
+      "belay_devices": {}
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "extra_required": ["take_course"]
+      },
+      "experience_level=expert": {
+        "ropes": {"extra": {"diameter_mm": {"max": 9.8}}}
+      }
+    },
+    "notes": "Indoor before outdoor. Helmet mandatory outdoors. Belay certification required."
+  },
+
+  "bouldering": {
+    "required_categories": ["climbing"],
+    "base": {
+      "climbing_shoes": {
+        "extra": {"fit": {"value": "snug"}}
+      },
+      "extra": {"chalk_bag": true, "crash_pad": true}
+    },
+    "modifiers": {},
+    "notes": "No rope or harness needed. Crash pad essential for outdoor bouldering."
+  },
+
+  "ice_climbing": {
+    "required_categories": ["footwear", "climbing", "layering"],
+    "base": {
+      "mountaineering_boots": {
+        "crampon_compatible": {"value": "C3"},
+        "sole_stiffness": {"value": "mountaineering"}
+      },
+      "crampons": {
+        "extra": {"compatibility": {"value": "C3"}, "type": {"value": "step-in"}}
+      },
+      "ice_axes": {
+        "extra": {"type": {"value": "technical"}, "quantity": 2}
+      },
+      "harnesses": {},
+      "helmets": {
+        "extra": {"ventilation": {"value": "minimal"}}
+      },
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]},
+        "fill_power": {"min": 650}
+      },
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool"]}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "eVent"]},
+        "waterproof_rating_mm": {"min": 20000}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "extra_required": ["guided_instruction_first_trips"]
+      }
+    },
+    "notes": "First trips must be with an experienced guide or mentor. Expect falling debris — minimal-vent helmet required."
+  },
+
+  "ski_touring": {
+    "required_categories": ["footwear", "layering", "camping"],
+    "base": {
+      "extra": {
+        "avalanche_transceiver": {"required": true},
+        "avalanche_probe": {"required": true},
+        "avalanche_shovel": {"required": true},
+        "ski_touring_boots": {"required": true}
+      },
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool", "synthetic"]}
+      },
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]},
+        "fill_power": {"min": 650}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "eVent"]},
+        "waterproof_rating_mm": {"min": 20000}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "extra_required": ["aiare_level_1_course", "resort_proficiency_first"]
+      }
+    },
+    "notes": "Avalanche beacon, probe, and shovel are mandatory. AIARE Level 1 course strongly recommended."
+  },
+
+  "avalanche_safety": {
+    "required_categories": ["camping"],
+    "base": {
+      "extra": {
+        "avalanche_transceiver": {"required": true},
+        "avalanche_probe": {"required": true},
+        "avalanche_shovel": {"required": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "The Big Three are non-negotiable. Gear is useless without training to use it."
+  },
+
+  "snowshoeing": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "insulation_type": {"any_of": ["Thinsulate", "PrimaLoft"]},
+        "sole_stiffness": {"value": "moderate"}
+      },
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool", "synthetic"]}
+      },
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "hiking_boots": {"sole_stiffness": {"value": "stiff"}}
+      }
+    },
+    "notes": "If in avalanche terrain add transceiver, probe, shovel."
+  },
+
+  "downhill_skiing": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "extra": {"ski_boots": {"required": true}, "helmet": {"required": true}},
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool", "synthetic"]}
+      },
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      }
+    },
+    "modifiers": {},
+    "notes": "Helmet mandatory. Wrist guards recommended for beginners."
+  },
+
+  "cross_country_skiing": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "extra": {"xc_ski_boots": {"required": true}},
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool", "synthetic"]}
+      },
+      "softshells": {
+        "waterproof_rating_mm": {"min": 5000}
+      }
+    },
+    "modifiers": {},
+    "notes": "Aerobic activity — dress for ventilation, not just warmth. Avoid heavy insulation."
+  },
+
+  "snowboarding": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "extra": {"snowboard_boots": {"required": true}, "helmet": {"required": true}},
+      "base_layers": {
+        "insulation_type": {"preferred": ["merino wool", "synthetic"]}
+      },
+      "insulated_jackets": {
+        "insulation_type": {"any_of": ["down", "synthetic"]}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      }
+    },
+    "modifiers": {
+      "experience_level=expert": {
+        "extra": {
+          "avalanche_transceiver": {"required": true},
+          "avalanche_probe": {"required": true},
+          "avalanche_shovel": {"required": true}
+        }
+      }
+    },
+    "notes": "Backcountry or off-piste requires AIARE Level 1 course and avalanche safety gear."
+  },
+
+  "hiking": {
+    "required_categories": ["footwear", "layering", "navigation"],
+    "base": {
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "DWR only"]},
+        "sole_stiffness": {"value": "moderate"}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      },
+      "base_layers": {}
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "hiking_boots": {"sole_stiffness": {"value": "stiff"}}
+      }
+    },
+    "notes": "Sun protection and hydration are critical. Pack layers for changing conditions."
+  },
+
+  "trail_running": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "trail_runners": {
+        "waterproofing": {"preferred": ["Gore-Tex", "DWR only"]},
+        "sole_stiffness": {"value": "flexible"},
+        "extra": {"lugs": {"value": "aggressive"}}
+      },
+      "base_layers": {},
+      "rain_shells": {
+        "weight_oz": {"max": 8},
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "trail_runners": {"sole_stiffness": {"value": "moderate"}}
+      }
+    },
+    "notes": "Weight is paramount. Packable emergency layer recommended."
+  },
+
+  "road_running": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "trail_runners": {
+        "sole_stiffness": {"value": "flexible"},
+        "extra": {"surface": {"value": "road"}}
+      },
+      "base_layers": {}
+    },
+    "modifiers": {},
+    "notes": "Road running shoes differ from trail — ensure appropriate outsole."
+  },
+
+  "trekking": {
+    "required_categories": ["footwear", "layering", "sleep", "camping", "navigation"],
+    "base": {
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "sole_stiffness": {"value": "stiff"},
+        "extra": {"ankle_support": {"value": "high"}}
+      },
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 20}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      },
+      "backpacks": {
+        "extra": {"capacity_liters": {"min": 50}}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "sleeping_bags": {"temperature_rating_f": {"max": 15}},
+        "hiking_boots": {"sole_stiffness": {"value": "stiff"}}
+      }
+    },
+    "notes": "Multi-day foot travel, often internationally. Durability and versatility over weight."
+  },
+
+  "whitewater_kayaking": {
+    "required_categories": ["layering"],
+    "base": {
+      "extra": {
+        "pfd": {"required": true},
+        "helmet": {"required": true},
+        "paddle": {"required": true}
+      },
+      "layering": {
+        "extra": {
+          "wetsuit_or_drysuit": {"required": true},
+          "note": "Dress for water temperature, not air temperature."
+        }
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "extra": {"self_rescue_course": {"required": true}}
+      },
+      "experience_level=expert": {
+        "layering": {
+          "extra": {
+            "drysuit": {"preferred": true},
+            "throw_bag": {"required": true}
+          }
+        }
+      }
+    },
+    "notes": "PFD non-negotiable. Dress for water temp. Class IV/V requires drysuit and throw bag."
+  },
+
+  "flatwater_kayaking": {
+    "required_categories": ["layering"],
+    "base": {
+      "extra": {
+        "pfd": {"required": true},
+        "paddle": {"required": true}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "DWR only"]}
+      }
+    },
+    "modifiers": {},
+    "notes": "PFD required. Cold-water paddling requires wetsuit even in warm air."
+  },
+
+  "canoeing": {
+    "required_categories": ["layering"],
+    "base": {
+      "extra": {
+        "pfd": {"required": true},
+        "paddle": {"required": true}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "DWR only"]}
+      }
+    },
+    "modifiers": {},
+    "notes": "PFD required. Wet exit skills recommended. Check river/lake conditions before launching."
+  },
+
+  "stand_up_paddle_boarding": {
+    "required_categories": ["layering"],
+    "base": {
+      "extra": {
+        "pfd": {"required": true},
+        "leash": {"required": true}
+      },
+      "layering": {
+        "extra": {
+          "rash_guard_or_wetsuit": {"value": "depends_on_water_temp"}
+        }
+      }
+    },
+    "modifiers": {},
+    "notes": "Leash is critical — keeps you connected to your board if you fall. PFD required."
+  },
+
+  "surfing": {
+    "required_categories": ["layering"],
+    "base": {
+      "extra": {
+        "leash": {"required": true},
+        "wetsuit": {"preferred": true}
+      },
+      "layering": {
+        "extra": {
+          "wetsuit_thickness_mm": {"preferred": "depends_on_water_temp"}
+        }
+      }
+    },
+    "modifiers": {},
+    "notes": "Wetsuit thickness depends on water temperature. Booties for cold-water surfing."
+  },
+
+  "snorkeling": {
+    "required_categories": ["layering"],
+    "base": {
+      "extra": {
+        "snorkel_mask": {"required": true},
+        "fins": {"required": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "Wetsuit recommended in water below 72°F. Rash guard for sun protection in warm water."
+  },
+
+  "fishing": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "extra": {"wading_compatible": true}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      }
+    },
+    "modifiers": {},
+    "notes": "Sun protection critical. Waders required for stream fishing."
+  },
+
+  "bikepacking": {
+    "required_categories": ["sleep", "layering", "camping"],
+    "base": {
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 25},
+        "weight_oz": {"max": 32}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "weight_oz": {"max": 10}
+      },
+      "extra": {"helmet": {"required": true}}
+    },
+    "modifiers": {},
+    "notes": "Weight and packability are paramount. Bivy or ultralight tent preferred over car-camping tent."
+  },
+
+  "car_camping": {
+    "required_categories": ["sleep", "layering", "camping"],
+    "base": {
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 20}
+      },
+      "sleep_pads": {},
+      "tents": {
+        "season_rating": {"value": "3-season"}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "sleeping_bags": {"temperature_rating_f": {"max": 15}}
+      }
+    },
+    "notes": "Weight not a constraint. Comfort and ease of setup are priorities."
+  },
+
+  "mountain_biking": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "extra": {
+        "helmet": {"required": true},
+        "mtb_helmet_type": {"preferred": "full-face for downhill"}
+      },
+      "trail_runners": {
+        "sole_stiffness": {"value": "moderate"},
+        "extra": {"mtb_compatible": true}
+      },
+      "softshells": {
+        "waterproof_rating_mm": {"min": 5000}
+      }
+    },
+    "modifiers": {},
+    "notes": "Full-face helmet for downhill/enduro. Knee and elbow pads for technical terrain."
+  },
+
+  "gravel_riding": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "extra": {"helmet": {"required": true}},
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No", "DWR only"]},
+        "weight_oz": {"max": 10}
+      }
+    },
+    "modifiers": {},
+    "notes": "Conditions vary widely. Pack a lightweight emergency layer and rain shell."
+  },
+
+  "road_cycling": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "extra": {"helmet": {"required": true}},
+      "base_layers": {
+        "extra": {"cycling_specific": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "Road cycling specific shoes and aerodynamic layering. Visibility clothing for roads."
+  },
+
+  "yoga": {
+    "required_categories": ["layering"],
+    "base": {
+      "base_layers": {
+        "materials": {"preferred": ["merino wool", "nylon", "spandex"]},
+        "extra": {"stretch": {"value": "4-way"}}
+      }
+    },
+    "modifiers": {},
+    "notes": "Outdoor yoga: add light windbreaker. Prioritize freedom of movement."
+  },
+
+  "general_fitness": {
+    "required_categories": ["layering", "footwear"],
+    "base": {
+      "base_layers": {},
+      "trail_runners": {
+        "sole_stiffness": {"value": "flexible"}
+      }
+    },
+    "modifiers": {},
+    "notes": "Versatile athletic wear. Match layering weight to conditions and activity intensity."
+  },
+
+  "wilderness_medicine": {
+    "required_categories": ["camping"],
+    "base": {
+      "extra": {
+        "wilderness_first_aid_kit": {"required": true},
+        "satellite_communicator": {"preferred": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "WFA or WFR certification recommended. Communication device critical in remote areas."
+  },
+
+  "navigation_and_orienteering": {
+    "required_categories": ["navigation"],
+    "base": {
+      "extra": {
+        "topographic_map": {"required": true},
+        "compass": {"required": true},
+        "gps_device": {"preferred": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "Paper map and compass are primary. GPS is backup, not primary navigation tool."
+  },
+
+  "outdoor_cooking": {
+    "required_categories": ["camping"],
+    "base": {
+      "extra": {
+        "camp_stove": {"required": true},
+        "cookware": {"required": true},
+        "water_filter": {"preferred": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "Stove fuel type must be available at destination. Canister stoves for backpacking, white gas for expedition."
+  },
+
+  "trail_maintenance": {
+    "required_categories": ["footwear", "layering"],
+    "base": {
+      "hiking_boots": {
+        "sole_stiffness": {"value": "stiff"},
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]}
+      },
+      "softshells": {}
+    },
+    "modifiers": {},
+    "notes": "Durable gloves and sturdy footwear essential. Consider high-visibility clothing."
+  },
+
+  "outdoor_photography": {
+    "required_categories": ["layering"],
+    "base": {
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      },
+      "extra": {
+        "dry_bag": {"preferred": true}
+      }
+    },
+    "modifiers": {},
+    "notes": "Weatherproof bags and dry storage for equipment. Layering must allow free arm movement."
+  },
+
+  "adventure_travel": {
+    "required_categories": ["footwear", "layering", "sleep"],
+    "base": {
+      "hiking_boots": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "sole_stiffness": {"value": "moderate"}
+      },
+      "rain_shells": {
+        "waterproofing": {"any_of": ["Gore-Tex", "H2No"]},
+        "waterproof_rating_mm": {"min": 10000}
+      },
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 30}
+      }
+    },
+    "modifiers": {},
+    "notes": "Versatility across varying climates. Pack compressibility and weight are key."
+  },
+
+  "hammocking": {
+    "required_categories": ["sleep", "camping"],
+    "base": {
+      "sleeping_bags": {
+        "temperature_rating_f": {"max": 30}
+      },
+      "extra": {
+        "hammock": {"required": true},
+        "tree_straps": {"required": true},
+        "bug_net": {"preferred": true},
+        "tarp": {"preferred": true},
+        "underquilt": {"preferred": "in temperatures below 50F"}
+      }
+    },
+    "modifiers": {
+      "experience_level=beginner": {
+        "sleeping_bags": {"temperature_rating_f": {"max": 20}}
+      }
+    },
+    "notes": "Underquilt is critical below 50°F — sleeping bags compress under your body and lose insulating value in a hammock."
+  }
+}
