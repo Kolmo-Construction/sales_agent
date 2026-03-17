@@ -18,25 +18,24 @@ This document is kept up to date as the system is built out.
 ## 1. Prerequisites
 
 Required software:
-- Python 3.11+
-- Docker (for Qdrant local instance)
+- Python 3.9+ (3.11+ recommended)
+- Docker (for Qdrant local instance) **or** a Qdrant Cloud free account — see below
 - PostgreSQL 15+ (local or remote)
 
 Required credentials (in `.env`):
 
 ```
 # LLM
-LLM_PROVIDER=ollama                         # ollama | outlines | anthropic
+LLM_PROVIDER=ollama                         # ollama | outlines
 LLM_MODEL=gemma2:9b                         # primary model — synthesis, translation, judges
 LLM_FAST_MODEL=llama3.2:latest              # fast model — intent classification, simple tasks
 OLLAMA_HOST=http://localhost:11434           # Ollama server (default)
-ANTHROPIC_API_KEY=                          # only needed when LLM_PROVIDER=anthropic
 # OUTLINES_GGUF_PATH=                       # only needed when LLM_PROVIDER=outlines
 #   Find path: ollama show gemma2:9b --modelfile | grep FROM
 
 # Vector store
-QDRANT_URL=http://localhost:6333            # local dev default
-QDRANT_API_KEY=                             # only needed for Qdrant Cloud (production)
+QDRANT_URL=http://localhost:6333            # local dev (Docker) — OR Qdrant Cloud URL (see below)
+QDRANT_API_KEY=                             # leave blank for local Docker; required for Qdrant Cloud
 
 # Embeddings (FastEmbed — local CPU, no API key)
 DENSE_MODEL=BAAI/bge-small-en-v1.5
@@ -46,10 +45,14 @@ SPARSE_MODEL=prithivida/Splade_PP_en_v1
 POSTGRES_DSN=postgresql://user:pass@localhost:5432/sales_agent
 ```
 
-**Local dev:** `LLM_PROVIDER=ollama` uses Ollama models already on your machine.
-`gemma2:9b` for synthesis/translation, `llama3.2:latest` for fast classification tasks.
+**LLM provider:** This project uses `LLM_PROVIDER=ollama` only.
+`gemma2:9b` for synthesis/translation/judges, `llama3.2:latest` for fast classification tasks.
+Both models must be pulled locally: `ollama pull gemma2:9b && ollama pull llama3.2`.
 
-**Production:** set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`. No other changes needed.
+**Qdrant Cloud (no Docker required):**
+Sign up free at cloud.qdrant.io. Create a cluster, then set `QDRANT_URL` to the cluster
+endpoint (including `:6333`) and `QDRANT_API_KEY` to the generated API key. The free tier
+(1 node, 0.5 GB RAM) is sufficient for the full 25K-product catalog.
 
 **Note on embedding models:** FastEmbed downloads models on first use (~100–500MB, cached
 locally). No API key needed. To swap to a hosted model, implement a new `EmbeddingProvider`
@@ -60,12 +63,21 @@ in `pipeline/embeddings.py` and re-run `python scripts/embed_catalog.py --rebuil
 ## 2. Environment Setup
 
 ```bash
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate          # Linux/macOS
+# .venv\Scripts\activate           # Windows
+
 # Install dependencies
 pip install -r requirements.txt
 
+# Pull Ollama models (must have Ollama installed: https://ollama.com)
+ollama pull gemma2:9b
+ollama pull llama3.2
+
 # Environment variables
 cp .env.example .env
-# Edit .env — fill in values below
+# Edit .env — fill in QDRANT_URL, QDRANT_API_KEY, and POSTGRES_DSN
 
 # Start Qdrant (local dev)
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
@@ -94,26 +106,90 @@ python scripts/embed_catalog.py \
 After these two steps, Qdrant holds both dense and sparse vectors for every product
 and the pipeline is ready to serve retrieval queries.
 
+**Known activities (38 total):** backpacking, winter_camping, alpine_climbing,
+mountaineering, rock_climbing, bouldering, ice_climbing, ski_touring,
+avalanche_safety, snowshoeing, downhill_skiing, cross_country_skiing, snowboarding,
+hiking, trail_running, road_running, trekking, whitewater_kayaking, flatwater_kayaking,
+canoeing, stand_up_paddle_boarding, surfing, snorkeling, fishing, bikepacking,
+car_camping, mountain_biking, gravel_riding, road_cycling, yoga, general_fitness,
+wilderness_medicine, navigation_and_orienteering, outdoor_cooking, trail_maintenance,
+outdoor_photography, adventure_travel, hammocking.
+
+Unknown activities fall back to LLM translation in `pipeline/translator.py`.
+
+### Retrieval tuning knobs
+
+All live as module-level constants in `pipeline/retriever.py`:
+
+| Constant | Default | Effect |
+|---|---|---|
+| `RETRIEVAL_K` | 8 | Products returned to synthesizer |
+| `HYBRID_ALPHA` | 0.5 | 1.0 = pure semantic, 0.0 = pure keyword |
+| `SPEC_RERANK_WEIGHT` | 0.3 | How much spec matching re-orders RRF results |
+| `SCORE_THRESHOLD` | 0.0 | Minimum similarity score (0.0 = disabled) |
+| `PREFETCH_MULTIPLIER` | 3 | Candidate pool = k × multiplier before fusion |
+
+### Synthesizer tuning knobs
+
+All live as module-level constants in `pipeline/synthesizer.py`:
+
+| Constant | Default | Effect |
+|---|---|---|
+| `SYNTH_TEMPERATURE` | 0.4 | Response creativity — lower = safer/more factual, higher = more natural |
+| `SYNTH_MAX_TOKENS` | 1024 | Max response length |
+| `SYSTEM_PROMPT` | (see file) | Core REI specialist persona — primary optimizer lever |
+| `CONTEXT_TEMPLATE` | (see file) | How customer context fields are formatted in prompt |
+
+### Safety flags
+
+10 high-risk activities have mandatory disclaimers in `data/ontology/safety_flags.json`:
+`mountaineering`, `alpine_climbing`, `ice_climbing`, `rock_climbing`, `ski_touring`,
+`snowboarding_backcountry`, `avalanche_safety`, `whitewater_kayaking`, `winter_camping`,
+`snowshoeing_avalanche_terrain`.
+
+`critical` and `high` risk activities inject the disclaimer block into the synthesizer
+system prompt as a HARD REQUIREMENT. `moderate` activities are noted but not enforced.
+`disclaimers_applied` in the agent state tracks which flags were triggered per turn —
+verified by the safety eval gate.
+
 ---
 
 ## 3. Running the Agent
-
-> _To be filled in once pipeline/graph.py is built._
 
 The agent is invoked via the compiled LangGraph graph. Each call passes a `session_id`
 (= LangGraph `thread_id`) so the graph can resume multi-turn conversations from the
 PostgreSQL checkpoint.
 
 ```python
-from pipeline.agent import agent
+from pipeline.agent import invoke, get_session_state
 
-# Single turn
-result = agent.invoke(
-    {"messages": [{"role": "user", "content": "I need a sleeping bag for winter camping"}]},
-    config={"configurable": {"thread_id": "session-123"}}
-)
-print(result["response"])
+# First turn (new session)
+response = invoke(session_id="session-123", user_message="I need a sleeping bag for winter camping")
+print(response)
+
+# Second turn (resumes from PostgreSQL checkpoint automatically)
+response = invoke(session_id="session-123", user_message="My budget is $200")
+print(response)
+
+# Inspect current state (debugging / evals)
+state = get_session_state("session-123")
+print(state["intent"], state["disclaimers_applied"])
 ```
+
+The graph and providers are initialised once at first call (lazy singleton).
+Re-initialise after swapping env vars: `from pipeline.agent import _reset; _reset()`
+
+Graph topology:
+```
+START -> classify_and_extract -> route_after_classify
+           |-> ask_followup -> END          (product_search, context incomplete)
+           |-> synthesize   -> END          (education / support / out_of_scope)
+           └-> translate_specs -> retrieve -> synthesize -> END
+```
+
+Checkpointer selection (automatic, based on env):
+- `POSTGRES_DSN` set   → PostgresSaver (full persistence, multi-turn across restarts)
+- `POSTGRES_DSN` unset → MemorySaver   (in-process, local dev / testing)
 
 ---
 

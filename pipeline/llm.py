@@ -30,6 +30,12 @@ Providers and their mechanism:
     not token-level CFG, but Anthropic enforces schema validity server-side.
     Equivalent reliability for our purposes.
 
+    Note: Anthropic also supports native structured output via
+    client.beta.messages.parse(response_format=MyModel) — no tool round-trip.
+    The tool-use approach here is intentionally kept for compatibility with
+    the LLMProvider protocol; migrate to .parse() if eliminating that overhead
+    becomes a priority.
+
 --- Provider selection ---
 
 LLM_PROVIDER=ollama    → OllamaProvider    (default, local dev)

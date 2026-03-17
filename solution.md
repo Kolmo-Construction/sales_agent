@@ -354,8 +354,7 @@ Two triggers:
 |---|---|---|
 | LLM (local dev) | **Ollama** — `gemma2:9b` (synthesis/translation) · `llama3.2` (classification) | Local CPU, no API key, swap via `LLM_PROVIDER=ollama` in env |
 | LLM (local dev, full CFG) | **Outlines** — loads GGUF directly via `outlines.models.llamacpp()` | Bypasses Ollama server; raw EBNF grammars via `complete_cfg()` when JSON schema is not expressive enough |
-| LLM (production) | **Anthropic Claude** — Sonnet 4.6 (primary) · Haiku 4.5 (fast tasks) | Swap via `LLM_PROVIDER=anthropic` — no code changes |
-| Structured output (CFG) | **Ollama GBNF** (`format=json_schema`) · **Outlines EBNF** · **Anthropic tool use** | Token-level enforcement — model cannot produce output that violates the schema. `complete_structured()` abstracts all three providers. No retry loops needed for schema validity. |
+| Structured output (CFG) | **Ollama GBNF** (`format=json_schema`) · **Outlines EBNF** | Token-level enforcement — model cannot produce output that violates the schema. `complete_structured()` abstracts both providers. No retry loops needed for schema validity. |
 | Agent orchestration + state management | **LangGraph** | Pipeline stages as graph nodes; conditional routing; built-in checkpointing to PostgreSQL |
 | Conversation persistence | **PostgreSQL** + `langgraph-checkpoint-postgres` | Full state checkpoint per node per turn; queryable history; custom `user_summaries` table |
 | Vector store (semantic + hybrid search) | **Qdrant** | Native sparse+dense hybrid search in one collection; local Docker for dev, Qdrant Cloud for prod |
@@ -394,6 +393,17 @@ Thresholds are defined in `evals/config.py` as named constants so they are easy 
 ## 8. Build Order
 
 Build the eval framework in this order — each step unblocks the next and gives signal fast:
+
+> **Pipeline status (as of 2026-03-17):**
+> ✅ `pipeline/state.py` — AgentState, ExtractedContext, initial_state()
+> ✅ `pipeline/intent.py` — Node 1: classify_and_extract (intent + context extraction)
+> ✅ `pipeline/translator.py` — Node 3: translate_specs (ontology lookup + LLM fallback)
+> ✅ `pipeline/retriever.py` — Node 4: hybrid RRF search + spec re-ranking
+> ✅ `pipeline/synthesizer.py` — Node 5: persona response + safety disclaimer injection
+> ✅ `pipeline/graph.py` — StateGraph: nodes, conditional routing, checkpointer
+> ✅ `pipeline/agent.py` — entry point: invoke(), get_session_state()
+> ⏳ Qdrant embed running — products.jsonl → Qdrant Cloud
+> ☐ evals/ framework (next build phase)
 
 1. **Intent classification eval** — deterministic, no LLM calls, zero infrastructure needed beyond a labeled JSONL file and sklearn. Gives immediate signal on the most upstream stage.
 

@@ -29,6 +29,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from pipeline.embeddings import FastEmbedProvider, default_provider
 from pipeline.models import Product
 
@@ -85,7 +88,7 @@ def drop_collection(client) -> None:
 
 def load_products(catalog_path: Path) -> list[Product]:
     products = []
-    with catalog_path.open() as f:
+    with catalog_path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

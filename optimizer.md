@@ -339,6 +339,20 @@ how to change it, what range is valid, and which scores it is expected to affect
       "notes": "Optimizer can add new activity mappings or extend existing ones. Modifying existing mappings requires regression check against all queries that use that activity."
     },
     {
+      "id": "thinking_effort",
+      "class": "B",
+      "type": "enum",
+      "file": "pipeline/synthesizer.py",
+      "variable": "THINKING_EFFORT",
+      "change_method": "enum_search",
+      "options": ["low", "medium", "high"],
+      "provider": "anthropic",
+      "models": ["claude-sonnet-4-6", "claude-opus-4-6"],
+      "affects_scores": ["safety", "factual_accuracy", "relevance", "groundedness"],
+      "risk": "low",
+      "notes": "Adaptive thinking effort for Anthropic models (Sonnet 4.6 and Opus 4.6 only). 'high' always reasons before responding — best for complex multi-constraint queries. 'low' skips extended thinking — faster and cheaper for simple lookups. Does not apply to Haiku or Ollama providers."
+    },
+    {
       "id": "context_injection_format",
       "class": "A",
       "type": "text",

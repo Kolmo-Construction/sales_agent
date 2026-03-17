@@ -17,6 +17,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gzip
+import html
 import json
 import re
 import sys
@@ -61,8 +63,13 @@ AMAZON_CATEGORY_MAP: dict[str, tuple[str, str]] = {
 
 
 def _map_amazon_category(categories: list[str]) -> tuple[str, str]:
-    """Map an Amazon category list to (category, subcategory). Fuzzy-matches."""
-    joined = " ".join(c.lower() for c in categories)
+    """Map an Amazon category list to (category, subcategory). Fuzzy-matches.
+
+    Ignores entries longer than 60 chars — those are feature text that leaked
+    into the category array in some Amazon records, not real category names.
+    """
+    clean = [c.lower() for c in categories if c and len(c) <= 60]
+    joined = " ".join(clean)
     for key, value in AMAZON_CATEGORY_MAP.items():
         if key in joined:
             return value
@@ -182,12 +189,24 @@ def _parse_price(raw: str | float | None) -> float:
     return float(m.group()) if m else 0.0
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _strip_html(text: str) -> str:
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
 def _flatten_text(value: str | list | None) -> str:
     if value is None:
         return ""
     if isinstance(value, list):
-        return " ".join(str(v) for v in value if v)
-    return str(value)
+        raw = " ".join(str(v) for v in value if v)
+    else:
+        raw = str(value)
+    return _strip_html(raw)
 
 
 def normalize_amazon(raw: dict) -> Product | None:
@@ -288,10 +307,18 @@ def main() -> None:
 
     # --- Amazon source ---
     amazon_path = Path(args.amazon)
+    # Also accept .json.gz if the plain JSONL is not found
+    if not amazon_path.exists():
+        gz_path = amazon_path.with_suffix("").with_suffix(".json.gz")
+        if gz_path.exists():
+            amazon_path = gz_path
     if amazon_path.exists():
         print(f"Loading Amazon data: {amazon_path}")
-        with amazon_path.open() as f:
+        opener = gzip.open if amazon_path.suffix == ".gz" else open
+        with opener(amazon_path, "rt", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f, 1):
+                if i % 100_000 == 0:
+                    print(f"  ...{i:,} lines read, {len(products):,} kept")
                 line = line.strip()
                 if not line:
                     continue
@@ -338,11 +365,11 @@ def main() -> None:
     # --- Write output ---
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as f:
+    with output_path.open("w", encoding="utf-8") as f:
         for product in products.values():
             f.write(product.model_dump_json() + "\n")
 
-    print(f"\nWrote {len(products)} products → {output_path}")
+    print(f"\nWrote {len(products)} products -> {output_path}")
     print(f"  Amazon: {len(products) - rei_count}  REI: {rei_count}")
 
 

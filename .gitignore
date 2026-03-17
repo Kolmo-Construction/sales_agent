@@ -17,8 +17,8 @@ env/
 evals/reports/*
 !evals/reports/.gitkeep
 
-# Data — raw catalog (may be large; add manually if needed)
-data/catalog/raw/*.jsonl
+# Data — raw catalog (large files, not committed)
+data/catalog/raw/
 data/catalog/products.jsonl
 
 # DB

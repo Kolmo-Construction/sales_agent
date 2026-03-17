@@ -12,6 +12,17 @@ problem statement and `solution.md` for the full design.
 
 ---
 
+## LLM Provider Decision
+
+**This project uses Ollama (local) only. Do NOT suggest Anthropic/Claude API.**
+
+The `AnthropicProvider` in `pipeline/llm.py` exists as a design artifact but will not
+be used. Do not recommend prompt caching, extended thinking, Claude model IDs, or any
+other Anthropic-specific features. All LLM work uses `LLM_PROVIDER=ollama` with local
+models (`gemma2:9b`, `llama3.2`).
+
+---
+
 ## Document Maintenance Rules
 
 These documents must be kept up to date. When any decision, design, or operational
