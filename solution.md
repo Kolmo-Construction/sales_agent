@@ -242,8 +242,7 @@ sales_agent/
 │   │   │   └── relevance_labels.jsonl   # {query_id, product_id, relevance: 0|1|2}
 │   │   ├── synthesis/
 │   │   │   ├── golden.jsonl             # {query, context, retrieved_products, expected_dims}
-│   │   │   ├── safety_critical.jsonl    # Scenarios that must trigger safety behavior
-│   │   │   └── adversarial.jsonl        # Contradictions, impossible budgets, dangerous setups
+│   │   │   └── safety_critical.jsonl    # Scenarios that must trigger safety behavior
 │   │   └── multiturn/
 │   │       ├── conversations.jsonl      # Full multi-turn dialogues with turn-level labels
 │   │       └── degradation.jsonl        # Ambiguity, retrieval failure, OOS scenarios
@@ -312,7 +311,7 @@ Static reference data used by both the pipeline and the eval framework.
 - `ontology/safety_flags.json` maps high-risk activities to required REI-sourced disclaimer text and mandatory gear statements. Shared between `pipeline/synthesizer.py` (inject disclaimers) and `evals/metrics/safety.py` (verify they were injected). One source of truth, no duplication.
 
 ### `evals/datasets/`
-All test data lives here, organized by stage. Each subdirectory has a `golden.jsonl` (broad coverage, primary eval) and an `edge_cases.jsonl` or `adversarial.jsonl` (targeted stress tests). Files are JSONL (one JSON object per line) for easy streaming and partial loading.
+All test data lives here, organized by stage. Each subdirectory has a `golden.jsonl` (broad coverage, primary eval) and an `edge_cases.jsonl` (targeted boundary cases). Stress tests and adversarial scenarios are covered by `evals/datasets/multiturn/degradation.jsonl`. Files are JSONL (one JSON object per line) for easy streaming and partial loading.
 
 Retrieval has two files because the query and the relevance labels are separate concerns — `queries.jsonl` is stable once written; `relevance_labels.jsonl` grows as experts annotate more products.
 

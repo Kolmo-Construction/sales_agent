@@ -26,9 +26,10 @@ _SUITES: dict[str, str] = {
     "extraction": str(_TESTS_DIR / "test_extraction.py"),
     "retrieval":  str(_TESTS_DIR / "test_retrieval.py"),
     "synthesis":  str(_TESTS_DIR / "test_synthesis.py"),
+    "multiturn":  str(_TESTS_DIR / "test_multiturn.py"),
 }
 
-_ALL_ORDER = ["safety", "intent", "extraction", "retrieval", "synthesis"]
+_ALL_ORDER = ["safety", "intent", "extraction", "retrieval", "synthesis", "multiturn"]
 
 
 def main() -> int:
