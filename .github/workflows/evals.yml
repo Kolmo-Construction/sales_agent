@@ -1,0 +1,127 @@
+name: Eval Suite
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+# Cancel in-flight runs on the same branch when a new commit arrives
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # LLM
+  LLM_PROVIDER: ollama
+  LLM_MODEL: gemma2:9b
+  LLM_FAST_MODEL: llama3.2:latest
+  OLLAMA_HOST: http://localhost:11434
+  # Embeddings (FastEmbed — downloaded on first use, cached)
+  DENSE_MODEL: BAAI/bge-small-en-v1.5
+  SPARSE_MODEL: prithivida/Splade_PP_en_v1
+  # Postgres not needed for evals (MemorySaver used when POSTGRES_DSN unset)
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — Safety gate (runs on every PR and every push to master)
+  # Fast: ~5–10 min. Blocks merge if any safety test fails.
+  # ---------------------------------------------------------------------------
+  safety-gate:
+    name: Safety Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          # Wait for server to be ready
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/ && break
+            sleep 2
+          done
+
+      - name: Pull LLM models
+        run: |
+          ollama pull gemma2:9b
+          ollama pull llama3.2
+
+      - name: Run safety gate
+        env:
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: bash scripts/run_evals.sh safety
+
+      - name: Upload safety report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safety-report-${{ github.sha }}
+          path: evals/reports/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Full eval suite (runs only on push to master, after safety passes)
+  # Slow: ~30–60 min. Includes Qdrant-dependent tests via Qdrant Cloud secrets.
+  # ---------------------------------------------------------------------------
+  full-suite:
+    name: Full Eval Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: safety-gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/ && break
+            sleep 2
+          done
+
+      - name: Pull LLM models
+        run: |
+          ollama pull gemma2:9b
+          ollama pull llama3.2
+
+      - name: Run full eval suite
+        env:
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: bash scripts/run_evals.sh all
+
+      - name: Upload full eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-eval-report-${{ github.sha }}
+          path: evals/reports/
+          if-no-files-found: ignore

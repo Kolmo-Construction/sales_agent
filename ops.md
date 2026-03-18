@@ -209,25 +209,88 @@ Checkpointer selection (automatic, based on env):
 
 ## 4. Running Evaluations
 
+> **How the eval framework works** — architecture, ground truth, metrics, and common questions:
+> see `evals/HOW_IT_WORKS.md`
+
+
 ```bash
-# Run full eval suite
+# Run full eval suite (safety gate always runs first)
 bash scripts/run_evals.sh
 
-# Run only safety gate (fast, used in PR checks)
-pytest evals/tests/test_safety.py -m safety
+# Run only safety gate (fast, used in PR checks) — blocks rest on failure
+bash scripts/run_evals.sh safety
 
-# Run a specific stage eval
-pytest evals/tests/test_intent.py -v -s      # intent classification (48 golden + 20 edge cases)
-pytest evals/tests/test_extraction.py -v -s  # context extraction (coming)
-pytest evals/tests/test_retrieval.py -v -s   # retrieval NDCG/MRR (coming)
+# Run a specific stage
+bash scripts/run_evals.sh intent       # intent classification (48 golden + 20 edge cases)
+bash scripts/run_evals.sh extraction   # context extraction (65 golden + 20 edge cases)
+bash scripts/run_evals.sh retrieval    # retrieval NDCG/MRR (25 seed queries — label first)
+bash scripts/run_evals.sh synthesis    # synthesis LLM judge (14 golden scenarios)
+bash scripts/run_evals.sh multiturn    # multi-turn coherence + degradation (8 convs + 11 scenarios)
+
+# Or invoke pytest directly
+pytest evals/tests/test_safety.py -m safety -v -s
+pytest evals/tests/test_synthesis.py -v -s
 ```
+
+**Safety eval (Steps 4a + 4b):**
+- 13 scenarios · 10 flagged activities · 3 edge cases (implied activity, expert user, budget-constrained)
+- Dataset: `evals/datasets/synthesis/safety_critical.jsonl`
+- Requires Ollama + gemma2:9b (synthesizer + judge) + llama3.2 (extractor). No Qdrant.
+- **Run first, gates all other tests** — if any safety test fails, non-safety tests are skipped.
+
+  **4a — Rule-based (zero LLM judge calls):** 5 gate tests + 1 info summary
+  - `test_all_safety_checks_pass` · `test_disclaimer_flagged_rate` · `test_disclaimer_text_present_rate`
+  - `test_gear_present_rate` · `test_critical_scenarios_all_pass`
+  - Metrics: `evals/metrics/safety.py:rule_check()` / `check_all()` — RuleCheckResult (3 binary checks)
+  - Catches: routing broken, SAFETY REQUIREMENT block completely ignored by LLM
+
+  **4b — LLM safety judge (gemma2:9b, safety.md rubric):** 2 gate tests + 1 info summary
+  - `test_critical_scenarios_llm_safety_score` — gate: all critical-risk scenarios ≥ 4/5
+  - `test_high_scenarios_llm_safety_score` — gate: all high-risk scenarios ≥ 3/5
+  - Metrics: `evals/metrics/safety.py:safety_llm_judge_score()` / `batch_safety_llm_judge()`
+  - Rubric: `evals/judges/rubrics/safety.md`
+  - Catches: disclaimer present but understated, gear listed but not explained, wrong tone for risk level
+
+**Multi-turn + degradation eval (Step 6):**
+- 8 multi-turn conversation scenarios + 11 degradation scenarios
+- Metrics: `evals/metrics/multiturn.py` (6 deterministic functions, zero LLM calls)
+- Coherence judge: `evals/judges/rubrics/coherence.md` · `build_coherence_prompt()` in `prompts.py`
+- Datasets: `evals/datasets/multiturn/conversations.jsonl` + `degradation.jsonl`
+- Tests: `evals/tests/test_multiturn.py` — 10 tests
+- Thresholds: context retention 100%, single follow-up 100%, repeated questions 0%, coherence ≥ 3.5, OOS deflection 100%, zero-result hallucination 0%, contradictory budget flagged ≥ 50%
+- `requires_qdrant` tests skip automatically when Qdrant is unreachable (checked once per session)
+- Zero-result tests (deg007/deg008) call `synthesize()` directly — no Qdrant needed
+- Coherence judge requires Ollama + gemma2:9b · context accumulation tests require Qdrant
+
+**Synthesis eval (Step 5 — LLM judges):**
+- 14 golden scenarios · diverse activities, experience levels, budget constraints
+- Products pre-stored in dataset — no Qdrant needed; synthesizer is called live
+- Judges: `evals/metrics/relevance.py` · `evals/metrics/persona.py`
+- Faithfulness: `evals/metrics/faithfulness.py` — string-based, zero LLM calls
+- Rubrics: `evals/judges/rubrics/` (relevance, persona, safety, completeness)
+- Thresholds: mean relevance ≥ 3.5, mean persona ≥ 3.5, hallucination rate ≤ 10%, grounding ≥ 20%
+- Requires Ollama + gemma2:9b (synthesizer + judge). No Qdrant needed.
+- Dataset: `evals/datasets/synthesis/golden.jsonl`
 
 **Intent eval baseline (2026-03-17, gemma2:9b / llama3.2):**
 - Golden accuracy: 0.979 · Macro F1: 0.979 · OOS recall: 1.000
 - Edge-case accuracy: 0.800 (intentionally hard boundary cases)
 - 1 golden miss: store-locator query classified as `out_of_scope` instead of `support_request`
 
-Reports are written to `evals/reports/` (gitignored).
+**Extraction eval baseline:** run `pytest evals/tests/test_extraction.py -v -s` to establish.
+
+**Retrieval eval — labeling required before running:**
+```bash
+# Step 1: label relevance interactively (~30–45 min for all 25 seed queries)
+python scripts/label_retrieval.py
+
+# Step 2: run the eval (no LLM calls — embedding + Qdrant only)
+pytest evals/tests/test_retrieval.py -v -s
+```
+Thresholds: mean NDCG@5 ≥ 0.70, mean MRR ≥ 0.50, zero-result rate ≤ 0.10.
+Thresholds: macro recall ≥ 0.85, macro precision ≥ 0.85, per-field recall/precision ≥ 0.80, edge macro recall ≥ 0.70.
+Fields tracked: activity, environment, conditions, experience_level, budget_usd, duration_days, group_size.
+Dataset: 65 golden examples · 20 edge cases. Conditions and group_size have ≥ 14 positive examples each for reliable per-field metrics (±6% CI).
 
 Reports are written to `evals/reports/` (gitignored).
 
@@ -291,9 +354,26 @@ python scripts/label_retrieval.py
 
 ## 6. Development Workflow
 
-> _To be expanded as CI is wired up._
+CI is wired in `.github/workflows/evals.yml` with two jobs:
 
-- PRs run the safety gate only (`pytest -m safety`)
-- Merge to main runs the full eval suite
-- Eval reports are archived as CI artifacts
+**`safety-gate` (every PR + every push to master)**
+- Runs `bash scripts/run_evals.sh safety` — safety-marked tests only
+- Requires: Ollama + gemma2:9b + llama3.2 (installed in CI runner)
+- No Qdrant needed — safety tests do not call retrieval
+- ~5–10 min · blocks merge on failure
+- Secrets required: `QDRANT_URL`, `QDRANT_API_KEY` (set in repo Settings → Secrets)
+
+**`full-suite` (push to master only, after safety-gate passes)**
+- Runs `bash scripts/run_evals.sh all` — complete suite including multiturn
+- Requires: Ollama + Qdrant Cloud (via `QDRANT_URL` / `QDRANT_API_KEY` secrets)
+- `requires_qdrant` tests auto-skip if Qdrant is unreachable
+- ~30–60 min · reports archived as GitHub Actions artifacts
+
+**GitHub secrets to configure** (Settings → Secrets and variables → Actions):
+```
+QDRANT_URL      — Qdrant Cloud cluster endpoint (e.g. https://xxx.aws.cloud.qdrant.io:6333)
+QDRANT_API_KEY  — Qdrant Cloud API key
+```
+
+- Eval reports are written to `evals/reports/` (gitignored) and archived as CI artifacts
 - Optimizer runs are on a separate branch and require human review before merge

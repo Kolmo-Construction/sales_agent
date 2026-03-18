@@ -406,6 +406,11 @@ Build the eval framework in this order — each step unblocks the next and gives
 > ✅ Qdrant embedded — 30,464 points in Qdrant Cloud · payload indexes created (`category` keyword, `price_usd` float)
 > ✅ End-to-end smoke test passed (winter camping query → safety disclaimer injected + product recommendation returned)
 > ✅ evals/ framework — Step 1 complete: intent classification eval (golden 0.979 F1, edge 0.80 acc)
+> ✅ evals/ framework — Step 2 complete: context extraction eval (65 golden + 20 edge cases; thresholds: macro recall/precision ≥ 0.85, per-field ≥ 0.80)
+> ✅ evals/ framework — Step 3 complete: retrieval eval (25 seed queries; label with scripts/label_retrieval.py before running; thresholds: NDCG@5 ≥ 0.70, MRR ≥ 0.50, zero-result ≤ 0.10)
+> ✅ evals/ framework — Step 4 complete: deterministic safety gate (4a: 5 rule-based gate tests) + LLM safety judge (4b: 3 tests — critical ≥ 4/5, high ≥ 3/5, summary; `batch_safety_llm_judge()` in safety.py)
+> ✅ evals/ framework — Step 5 complete: synthesis LLM judge infrastructure + eval (14 golden scenarios; judges: relevance, persona, faithfulness; rubrics in evals/judges/rubrics/; thresholds: mean relevance/persona ≥ 3.5, hallucination ≤ 10%, grounding ≥ 20%; runner: scripts/run_evals.sh; config: evals/config.py)
+> ✅ evals/ framework — Step 6 complete: multi-turn coherence + degradation eval (8 conversation scenarios, 11 degradation scenarios; metrics: evals/metrics/multiturn.py; coherence LLM judge: evals/judges/rubrics/coherence.md + build_coherence_prompt(); conftest: session-scoped embedding_provider + eval_graph; test_multiturn.py: 10 tests; thresholds in evals/config.py; requires_qdrant marker registered in pytest.ini)
 
 1. **Intent classification eval** — deterministic, no LLM calls, zero infrastructure needed beyond a labeled JSONL file and sklearn. Gives immediate signal on the most upstream stage.
 
@@ -413,12 +418,12 @@ Build the eval framework in this order — each step unblocks the next and gives
 
 3. **Retrieval eval** — requires a relevance-labeled product set (use `scripts/label_retrieval.py`). NDCG/MRR are the most actionable metrics for improving catalog search.
 
-4. **Safety gate** — implement `evals/metrics/safety.py` (rule-based first, LLM judge second) and `evals/tests/test_safety.py`. Wire this into CI before any synthesis work. Once the safety gate exists, it can never regress.
+4a. **Safety gate (deterministic)** — `evals/metrics/safety.py` rule checks (disclaimer_flagged, disclaimer_text_present, gear_present) + `evals/tests/test_safety.py` (5 gate tests). Runs first in every test session via conftest.py ordering hook. Dataset: `evals/datasets/synthesis/safety_critical.jsonl` (13 scenarios).
 
-5. **Synthesis eval (relevance + groundedness)** — add LLM-as-judge for the two most impactful synthesis dimensions. Requires `evals/judges/` infrastructure.
+4b. **Safety gate (LLM judge)** — gemma2:9b scores each of the 13 safety-critical scenarios against `evals/judges/rubrics/safety.md`. Two gate tests in `test_safety.py`: critical-risk scenarios must score ≥ 4/5, high-risk ≥ 3/5. Catches soft failures 4a misses: disclaimer present but understated, gear listed but not explained, wrong tone for risk level. `batch_safety_llm_judge()` in `evals/metrics/safety.py`.
 
-6. **Persona + completeness eval** — add the remaining LLM judges once the core quality metrics are stable.
+5. **Synthesis eval (relevance + persona + groundedness)** — `evals/judges/` infrastructure (base.py, prompts.py, 4 rubrics) + `evals/metrics/` (relevance.py, persona.py, faithfulness.py) + `evals/tests/test_synthesis.py` (5 tests) + `evals/datasets/synthesis/golden.jsonl` (14 scenarios). Config: `evals/config.py`. Runner: `scripts/run_evals.sh`. No Qdrant needed — products stored in dataset.
 
-7. **Multi-turn + degradation eval** — add last, once the single-turn pipeline is solid. These tests are the most expensive to author and run.
+6. **Multi-turn + degradation eval** — `evals/metrics/multiturn.py` (6 deterministic functions: single_followup_check, repeated_question_check, context_fields_present, oos_deflection_check, zero_result_check, contradictory_flag) + `evals/judges/rubrics/coherence.md` + `build_coherence_prompt()` in prompts.py + `evals/tests/test_multiturn.py` (10 tests). Datasets: `evals/datasets/multiturn/conversations.jsonl` (8 conversations) + `degradation.jsonl` (11 scenarios). Infrastructure: session-scoped `embedding_provider` + `eval_graph` in conftest.py; `requires_qdrant` marker for Qdrant-dependent tests. Zero-result tests call `synthesize()` directly — no Qdrant needed. Coherence judge scores full conversation transcript (1–5), threshold ≥ 3.5.
 
-8. **CI wiring** — connect `run_evals.sh` to GitHub Actions, set threshold gates, wire report artifacts.
+7. **CI wiring** — `.github/workflows/evals.yml`: two jobs — `safety-gate` (every PR, ~10 min, no Qdrant) and `full-suite` (push to master only, ~60 min, Qdrant Cloud via secrets). Ollama + models installed in runner. Reports archived as GitHub Actions artifacts. Secrets required: `QDRANT_URL`, `QDRANT_API_KEY`.
