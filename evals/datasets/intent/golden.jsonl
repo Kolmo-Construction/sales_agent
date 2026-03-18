@@ -1,0 +1,48 @@
+{"query": "I need a sleeping bag for winter camping in the Cascades.", "expected_intent": "product_search", "notes": "clear product ask, specific activity and environment"}
+{"query": "Can you recommend trail running shoes for rocky terrain?", "expected_intent": "product_search", "notes": "explicit recommendation request"}
+{"query": "What's the best tent for solo backpacking?", "expected_intent": "product_search", "notes": "best-of product question"}
+{"query": "I'm looking for a rain jacket under $300.", "expected_intent": "product_search", "notes": "budget-constrained product search"}
+{"query": "I need crampons for mountaineering, I'm an intermediate climber.", "expected_intent": "product_search", "notes": "specific gear + experience level stated"}
+{"query": "What kayak paddle would you recommend for flatwater paddling?", "expected_intent": "product_search", "notes": "activity-specific gear ask"}
+{"query": "I need a headlamp for night hiking.", "expected_intent": "product_search", "notes": "simple direct product ask"}
+{"query": "Looking for a 3-season sleeping bag for car camping.", "expected_intent": "product_search", "notes": "product type + use case stated"}
+{"query": "I want to buy a GPS watch for trail running.", "expected_intent": "product_search", "notes": "explicit buy intent"}
+{"query": "Help me pick a climbing harness for sport climbing.", "expected_intent": "product_search", "notes": "help selecting a product"}
+{"query": "My hiking boots are worn out — I need new ones for day hikes.", "expected_intent": "product_search", "notes": "replacement purchase"}
+{"query": "I want to upgrade my backpack from 40L to 65L.", "expected_intent": "product_search", "notes": "upgrade framing still product_search"}
+{"query": "What's the difference between down and synthetic insulation?", "expected_intent": "general_education", "notes": "classic education question, no purchase intent"}
+{"query": "How do I choose the right sleeping bag temperature rating?", "expected_intent": "general_education", "notes": "how-to knowledge question"}
+{"query": "What does GORE-TEX actually do?", "expected_intent": "general_education", "notes": "technology explanation request"}
+{"query": "Can you explain what R-value means for sleeping pads?", "expected_intent": "general_education", "notes": "terminology explanation"}
+{"query": "How do I prevent blisters on a long hike?", "expected_intent": "general_education", "notes": "technique / tips question, no product ask"}
+{"query": "What's the difference between crampons and microspikes?", "expected_intent": "general_education", "notes": "gear comparison for knowledge, not shopping"}
+{"query": "How should I layer clothing for cold weather hiking?", "expected_intent": "general_education", "notes": "technique question"}
+{"query": "What is the best way to break in new hiking boots?", "expected_intent": "general_education", "notes": "care/technique question"}
+{"query": "How do trekking poles help on a descent?", "expected_intent": "general_education", "notes": "gear usage explanation"}
+{"query": "What is the difference between a 3-season and 4-season tent?", "expected_intent": "general_education", "notes": "category education, not shopping"}
+{"query": "How does altitude affect physical performance?", "expected_intent": "general_education", "notes": "outdoor knowledge, no gear ask"}
+{"query": "What is leave no trace?", "expected_intent": "general_education", "notes": "outdoor ethics education"}
+{"query": "I need to return the jacket I bought last week.", "expected_intent": "support_request", "notes": "explicit return request"}
+{"query": "My order hasn't arrived yet — where is it?", "expected_intent": "support_request", "notes": "order tracking"}
+{"query": "Can I exchange my boots for a different size?", "expected_intent": "support_request", "notes": "exchange / sizing"}
+{"query": "What is REI's return policy?", "expected_intent": "support_request", "notes": "policy question = support"}
+{"query": "I was charged twice for the same order.", "expected_intent": "support_request", "notes": "billing issue"}
+{"query": "How do I cancel my order?", "expected_intent": "support_request", "notes": "order management"}
+{"query": "My sleeping bag arrived with a broken zipper. What should I do?", "expected_intent": "support_request", "notes": "damaged item — support"}
+{"query": "Where is the nearest REI store to downtown Portland?", "expected_intent": "support_request", "notes": "store locator = support"}
+{"query": "Do you offer a military discount?", "expected_intent": "support_request", "notes": "discount policy"}
+{"query": "How do I redeem my REI dividend?", "expected_intent": "support_request", "notes": "account / loyalty program"}
+{"query": "I forgot my REI account password.", "expected_intent": "support_request", "notes": "account management"}
+{"query": "Is there a warranty on the tent I bought?", "expected_intent": "support_request", "notes": "warranty = support, not education"}
+{"query": "What is the capital of France?", "expected_intent": "out_of_scope", "notes": "geography — completely unrelated"}
+{"query": "Who won the Super Bowl last year?", "expected_intent": "out_of_scope", "notes": "sports news — unrelated"}
+{"query": "Can you help me write a Python script?", "expected_intent": "out_of_scope", "notes": "programming — unrelated"}
+{"query": "What's a good recipe for chocolate cake?", "expected_intent": "out_of_scope", "notes": "food — unrelated"}
+{"query": "What are the best stocks to buy right now?", "expected_intent": "out_of_scope", "notes": "finance — unrelated"}
+{"query": "How do I fix a leaking faucet?", "expected_intent": "out_of_scope", "notes": "home repair — unrelated"}
+{"query": "Can you recommend a good movie to watch tonight?", "expected_intent": "out_of_scope", "notes": "entertainment — unrelated"}
+{"query": "How do I get pre-approved for a mortgage?", "expected_intent": "out_of_scope", "notes": "finance — unrelated"}
+{"query": "What is the fastest car in the world?", "expected_intent": "out_of_scope", "notes": "automotive — unrelated"}
+{"query": "How do I learn Spanish quickly?", "expected_intent": "out_of_scope", "notes": "language learning — unrelated"}
+{"query": "What is the meaning of life?", "expected_intent": "out_of_scope", "notes": "philosophical — unrelated"}
+{"query": "What's a good gift for my nephew's birthday?", "expected_intent": "out_of_scope", "notes": "generic gift question, not outdoor gear specific"}

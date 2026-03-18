@@ -209,8 +209,6 @@ Checkpointer selection (automatic, based on env):
 
 ## 4. Running Evaluations
 
-> _To be filled in once evals/ is scaffolded._
-
 ```bash
 # Run full eval suite
 bash scripts/run_evals.sh
@@ -218,10 +216,18 @@ bash scripts/run_evals.sh
 # Run only safety gate (fast, used in PR checks)
 pytest evals/tests/test_safety.py -m safety
 
-# Run a specific stage
-pytest evals/tests/test_intent.py
-pytest evals/tests/test_retrieval.py
+# Run a specific stage eval
+pytest evals/tests/test_intent.py -v -s      # intent classification (48 golden + 20 edge cases)
+pytest evals/tests/test_extraction.py -v -s  # context extraction (coming)
+pytest evals/tests/test_retrieval.py -v -s   # retrieval NDCG/MRR (coming)
 ```
+
+**Intent eval baseline (2026-03-17, gemma2:9b / llama3.2):**
+- Golden accuracy: 0.979 · Macro F1: 0.979 · OOS recall: 1.000
+- Edge-case accuracy: 0.800 (intentionally hard boundary cases)
+- 1 golden miss: store-locator query classified as `out_of_scope` instead of `support_request`
+
+Reports are written to `evals/reports/` (gitignored).
 
 Reports are written to `evals/reports/` (gitignored).
 

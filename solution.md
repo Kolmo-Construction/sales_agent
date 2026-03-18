@@ -403,8 +403,9 @@ Build the eval framework in this order — each step unblocks the next and gives
 > ✅ `pipeline/graph.py` — StateGraph: nodes, conditional routing, checkpointer
 > ✅ `pipeline/agent.py` — entry point: invoke(), get_session_state()
 > ✅ Catalog re-ingested — 32,680 products, 97% activity_tags, fixed subcategories
-> ⏳ Qdrant re-embed running — products.jsonl → Qdrant Cloud
-> ☐ evals/ framework (next build phase)
+> ✅ Qdrant embedded — 30,464 points in Qdrant Cloud · payload indexes created (`category` keyword, `price_usd` float)
+> ✅ End-to-end smoke test passed (winter camping query → safety disclaimer injected + product recommendation returned)
+> ✅ evals/ framework — Step 1 complete: intent classification eval (golden 0.979 F1, edge 0.80 acc)
 
 1. **Intent classification eval** — deterministic, no LLM calls, zero infrastructure needed beyond a labeled JSONL file and sklearn. Gives immediate signal on the most upstream stage.
 

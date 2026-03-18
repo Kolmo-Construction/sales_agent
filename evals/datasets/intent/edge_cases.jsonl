@@ -1,0 +1,20 @@
+{"query": "I need shoes.", "expected_intent": "product_search", "notes": "minimal context but purchase intent is clear"}
+{"query": "Do you carry The North Face?", "expected_intent": "product_search", "notes": "brand availability question implies shopping intent"}
+{"query": "How warm is the Marmot Helium sleeping bag?", "expected_intent": "general_education", "notes": "asking about a specific product spec without indicating purchase intent — education not search"}
+{"query": "I'm thinking about getting into rock climbing — what do I need?", "expected_intent": "product_search", "notes": "gear list request = product_search even though framed as 'thinking about'"}
+{"query": "Is the Patagonia R1 fleece warm enough for ski touring?", "expected_intent": "product_search", "notes": "fit-for-purpose question about a named product with a specific use case — product_search"}
+{"query": "My tent pole snapped in the field. Can I get a replacement pole?", "expected_intent": "support_request", "notes": "warranty / replacement part = support_request"}
+{"query": "I bought something and it doesn't fit — what are my options?", "expected_intent": "support_request", "notes": "post-purchase issue = support_request"}
+{"query": "Can you tell me about avalanche safety?", "expected_intent": "general_education", "notes": "topic education, no product ask — general_education even though gear exists for it"}
+{"query": "I need avalanche safety gear for ski touring.", "expected_intent": "product_search", "notes": "same topic as above but explicit gear request — product_search"}
+{"query": "How do I set up my new tent?", "expected_intent": "general_education", "notes": "setup help for a product they already own = education, not product search"}
+{"query": "I'm a total beginner — where do I start with backpacking?", "expected_intent": "product_search", "notes": "beginner gear list request — framed as 'where to start' but intent is product guidance"}
+{"query": "Is REI a good company?", "expected_intent": "out_of_scope", "notes": "opinion about the company, not a gear or support question"}
+{"query": "Hello, I'm looking for some gear.", "expected_intent": "product_search", "notes": "vague but clearly product_search — do not classify as out_of_scope"}
+{"query": "I want to compare the Arc'teryx Beta AR vs the Patagonia Torrentshell.", "expected_intent": "product_search", "notes": "product comparison = product_search"}
+{"query": "I need a gift for my partner who loves hiking.", "expected_intent": "product_search", "notes": "gift shopping is still product_search when domain-specific"}
+{"query": "What's the best way to invest in outdoor gear companies?", "expected_intent": "out_of_scope", "notes": "financial investing — out_of_scope even though 'outdoor gear' is mentioned"}
+{"query": "I think I was shipped the wrong item.", "expected_intent": "support_request", "notes": "fulfillment error = support_request"}
+{"query": "Is it safe to hike alone at night?", "expected_intent": "general_education", "notes": "safety advice question = education, no product ask"}
+{"query": "Do you price match?", "expected_intent": "support_request", "notes": "store policy question = support_request"}
+{"query": "I need something to keep me warm on a cold summit, budget around $500.", "expected_intent": "product_search", "notes": "vague product description but clear purchase intent with budget — product_search"}
