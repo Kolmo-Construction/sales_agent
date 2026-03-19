@@ -27,15 +27,21 @@ because the translator has the full context needed to write a good query.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
 from pipeline.llm import LLMProvider, Message
 from pipeline.models import ProductSpecs
+from pipeline.overrides import get as _ov
 from pipeline.state import AgentState, ExtractedContext
+from pipeline.tracing import stage_span
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -373,7 +379,7 @@ def translate_via_llm(context: ExtractedContext, provider: LLMProvider) -> Produ
         f'Context: "{ex["context"]}"\nResult: {ex["result"]}'
         for ex in TRANSLATE_EXAMPLES
     )
-    system = TRANSLATE_SYSTEM_PROMPT + f"\n\nExamples:\n{examples_text}"
+    system = _ov("query_translation_prompt", TRANSLATE_SYSTEM_PROMPT) + f"\n\nExamples:\n{examples_text}"
 
     llm_messages = [Message(role="user", content=f"Translate this customer context to product specs:\n{context_str}")]
 
@@ -381,7 +387,7 @@ def translate_via_llm(context: ExtractedContext, provider: LLMProvider) -> Produ
         messages=llm_messages,
         schema=LLMTranslationResult,
         system=system,
-        temperature=TRANSLATE_TEMPERATURE,
+        temperature=_ov("translation_temperature", TRANSLATE_TEMPERATURE),
         use_fast_model=False,
     )
 
@@ -422,20 +428,36 @@ def translate_specs(state: AgentState, provider: LLMProvider) -> dict:
 
     if context is None:
         # Defensive — graph should only route here after successful extraction
+        logger.warning("[translator] extracted_context is None — returning None specs")
         return {"translated_specs": None}
 
-    # Try ontology first (fast, deterministic, no LLM cost)
-    specs = translate_via_ontology(context)
+    with stage_span("translate_specs", activity=context.activity or ""):
 
-    if specs is None:
-        # Activity not in ontology — fall back to LLM
-        specs = translate_via_llm(context, provider)
-        specs.extra["source"] = "llm_fallback"
-    else:
-        specs.extra["source"] = "ontology"
+        t0 = time.perf_counter()
 
-    # Apply budget as a filter hint for the retriever
-    if context.budget_usd:
-        specs.extra["budget_usd_max"] = context.budget_usd
+        # Try ontology first (fast, deterministic, no LLM cost)
+        specs = translate_via_ontology(context)
 
-    return {"translated_specs": specs}
+        if specs is None:
+            # Activity not in ontology — fall back to LLM
+            specs = translate_via_llm(context, provider)
+            specs.extra["source"] = "llm_fallback"
+            source = "llm_fallback"
+        else:
+            specs.extra["source"] = "ontology"
+            source = "ontology"
+
+        # Apply budget as a filter hint for the retriever
+        if context.budget_usd:
+            specs.extra["budget_usd_max"] = context.budget_usd
+
+        logger.info(
+            "[translator] activity=%s  source=%s  categories=%s  search_query=%r  (%.3fs)",
+            context.activity,
+            source,
+            specs.extra.get("required_categories", []),
+            specs.extra.get("search_query", "")[:80],
+            time.perf_counter() - t0,
+        )
+
+        return {"translated_specs": specs}

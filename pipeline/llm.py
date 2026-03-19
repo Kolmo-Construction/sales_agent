@@ -69,6 +69,8 @@ import time
 from dataclasses import dataclass
 from typing import Protocol, TypeVar, runtime_checkable
 
+from pipeline.tracing import get_span
+
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
@@ -211,13 +213,15 @@ class OllamaProvider:
             messages=self._msgs(messages, system),
             options={"temperature": temperature, "num_predict": max_tokens},
         )
-        return LLMResponse(
+        result = LLMResponse(
             content=response.message.content,
             input_tokens=response.prompt_eval_count or 0,
             output_tokens=response.eval_count or 0,
             model=model,
             latency_ms=(time.monotonic() - t0) * 1000,
         )
+        _log_generation("complete", model, system, messages, result.content, result)
+        return result
 
     def complete_structured(
         self,
@@ -242,7 +246,20 @@ class OllamaProvider:
 
         # model_validate_json here is a type-coercion step, not a correctness
         # check — the grammar already guaranteed the output is schema-valid.
-        return schema.model_validate_json(response.message.content)
+        validated = schema.model_validate_json(response.message.content)
+        _log_generation(
+            f"complete_structured/{schema.__name__}",
+            model, system, messages,
+            validated.model_dump(),
+            LLMResponse(
+                content=response.message.content,
+                input_tokens=response.prompt_eval_count or 0,
+                output_tokens=response.eval_count or 0,
+                model=model,
+                latency_ms=(time.monotonic() - t0) * 1000,
+            ),
+        )
+        return validated
 
 
 # ---------------------------------------------------------------------------
@@ -430,13 +447,15 @@ class AnthropicProvider:
         if system:
             kwargs["system"] = system
         response = self._client.messages.create(**kwargs)
-        return LLMResponse(
+        result = LLMResponse(
             content=response.content[0].text,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             model=model,
             latency_ms=(time.monotonic() - t0) * 1000,
         )
+        _log_generation("complete", model, system, messages, result.content, result)
+        return result
 
     def complete_structured(
         self,
@@ -447,6 +466,7 @@ class AnthropicProvider:
         use_fast_model: bool = False,
     ) -> T:
         model = self._fast_model if use_fast_model else self._model
+        t0 = time.monotonic()
         kwargs: dict = dict(
             model=model,
             max_tokens=1024,
@@ -464,13 +484,62 @@ class AnthropicProvider:
         response = self._client.messages.create(**kwargs)
         for block in response.content:
             if block.type == "tool_use":
-                return schema.model_validate(block.input)
+                validated = schema.model_validate(block.input)
+                _log_generation(
+                    f"complete_structured/{schema.__name__}",
+                    model, system, messages,
+                    validated.model_dump(),
+                    LLMResponse(
+                        content="",
+                        input_tokens=response.usage.input_tokens,
+                        output_tokens=response.usage.output_tokens,
+                        model=model,
+                        latency_ms=(time.monotonic() - t0) * 1000,
+                    ),
+                )
+                return validated
         raise ValueError(f"Anthropic returned no tool_use block for {schema.__name__}")
 
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Langfuse generation helper — called by every provider after each LLM call
+# ---------------------------------------------------------------------------
+
+def _log_generation(
+    name: str,
+    model: str,
+    system: str | None,
+    messages: list[Message],
+    output: str | dict,
+    meta: "LLMResponse",
+) -> None:
+    """
+    Log an LLM call as a Langfuse generation under the current span/trace.
+
+    No-ops silently when Langfuse is not configured or no trace is active.
+    """
+    parent = get_span()
+    if parent is None:
+        return
+
+    lf_input: list[dict] = []
+    if system:
+        lf_input.append({"role": "system", "content": system})
+    lf_input.extend({"role": m.role, "content": m.content} for m in messages)
+
+    parent.generation(
+        name=name,
+        model=model,
+        input=lf_input,
+        output=output,
+        usage={"input": meta.input_tokens, "output": meta.output_tokens},
+        metadata={"latency_ms": round(meta.latency_ms)},
+    )
+
 
 def default_provider() -> OllamaProvider | OutlinesProvider | AnthropicProvider:
     """

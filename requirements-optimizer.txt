@@ -1,0 +1,40 @@
+# Optimizer-only requirements
+# Install in the optimizer container or a local venv dedicated to the optimizer.
+# Does NOT include the full pipeline stack (no LangGraph, Streamlit, etc.).
+#
+# Usage:
+#   pip install -r requirements-optimizer.txt
+
+# Core
+pydantic>=2.0
+python-dotenv>=1.0
+
+# Numeric optimization
+optuna>=3.6.0                        # TPE sampler + NSGA-II multi-objective
+optuna-integration[mlflow]>=3.6.0   # MLflow callback for Optuna
+
+# Experiment tracking
+mlflow>=2.13.0
+
+# Prompt optimization (Phase 2)
+dspy-ai>=2.4.0                       # MIPROv2 prompt + few-shot optimizer
+
+# Stats (generalization guard)
+scipy>=1.13.0
+numpy>=1.26.0
+
+# CLI
+typer[all]>=0.12.0                   # includes rich
+rich>=13.0.0
+
+# HTTP client (HTTP mode harness)
+httpx>=0.27.0
+
+# YAML config parsing
+PyYAML>=6.0
+
+# PostgreSQL (MLflow backend + feedback store reads)
+psycopg[binary]>=3.1
+
+# Git integration (commit.py)
+gitpython>=3.1.0

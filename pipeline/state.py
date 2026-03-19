@@ -10,7 +10,7 @@ state fields — all shared data lives here.
 
 --- Field ownership by node ---
 
-  classify_and_extract  →  intent, extracted_context
+  classify_and_extract  →  intent, extracted_context, oos_sub_class, oos_complexity
   check_completeness    →  (reads extracted_context, routes — no writes)
   ask_followup          →  messages (appends assistant follow-up)
   translate_specs       →  translated_specs
@@ -176,6 +176,18 @@ class AgentState(TypedDict):
     # Output of Node 4. Candidates from Qdrant hybrid search.
     # None until retrieve runs.
 
+    oos_sub_class: Optional[str]
+    # Output of Node 1 (when intent == "out_of_scope").
+    # Controlled vocabulary: "social" | "benign" | "inappropriate"
+    # None for all other intents.
+
+    oos_complexity: Optional[str]
+    # Output of Node 1 (when intent == "out_of_scope").
+    # Controlled vocabulary: "simple" | "complex"
+    # Drives model selection in synthesize: simple → llama3.2, complex → gemma2:9b.
+    # Always "simple" for social and inappropriate (enforced by the sub-classifier prompt).
+    # None for non-OOS intents.
+
     response: Optional[str]
     # Output of Node 5. The final assistant response text.
     # None until synthesize runs.
@@ -203,6 +215,8 @@ def initial_state(session_id: str, user_message: str) -> AgentState:
         messages=[{"role": "user", "content": user_message}],
         intent=None,
         extracted_context=None,
+        oos_sub_class=None,
+        oos_complexity=None,
         translated_specs=None,
         retrieved_products=None,
         response=None,

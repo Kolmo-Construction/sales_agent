@@ -1,34 +1,38 @@
 """
 Node 1: classify_and_extract
 
-Two sequential LLM calls per turn:
-  1. classify_intent()   — fast model, classifies the customer message into one of four intents.
-  2. extract_context()   — primary model, extracts structured context fields.
-                           Only runs when intent == "product_search".
+LLM calls per turn (varies by intent):
+  product_search   → 2 calls: classify_intent() [fast] + extract_context() [primary]
+  general_education
+  support_request  → 1 call:  classify_intent() [fast]
+  out_of_scope     → 2 calls: classify_intent() [fast] + classify_oos_subtype() [fast]
 
-Returns a partial AgentState update: {"intent": ..., "extracted_context": ...}
+Returns a partial AgentState update:
+  {"intent", "extracted_context", "oos_sub_class", "oos_complexity"}
 
---- Why two calls instead of one combined schema? ---
+--- Why separate calls instead of one combined schema? ---
 
-Keeping classification separate from extraction lets the fast model (llama3.2) handle
-the simpler binary-style classification task while the primary model (gemma2:9b) handles
-the richer extraction. It also allows the optimizer to tune each independently (different
-few-shot examples, different temperatures, independent score attribution).
-
-The cost is one extra round-trip on product_search turns. Non-product-search intents
-(education, support, out_of_scope) skip extraction entirely, so those turns pay only
-the fast-model cost.
+Keeping classification separate from extraction (and OOS sub-classification) lets the
+fast model (llama3.2) handle simpler tasks while the primary model (gemma2:9b) handles
+richer extraction. It also allows the optimizer to tune each call independently
+(different few-shot examples, different temperatures, independent score attribution).
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
 from pipeline.llm import LLMProvider, Message
+from pipeline.overrides import get as _ov
 from pipeline.state import AgentState, ExtractedContext
+from pipeline.tracing import stage_span
 
 # ---------------------------------------------------------------------------
 # Module-level constants — all tuneable parameters live here
@@ -40,6 +44,7 @@ _LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 # Temperatures — 0.0 for deterministic structured tasks
 INTENT_TEMPERATURE: float = 0.0
 EXTRACT_TEMPERATURE: float = 0.0
+OOS_SUBCLASS_TEMPERATURE: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Intent classification
@@ -77,6 +82,14 @@ INTENT_EXAMPLES: list[dict] = [
         "intent": "out_of_scope",
     },
     {
+        "message": "Hi!",
+        "intent": "out_of_scope",
+    },
+    {
+        "message": "Thanks, that was really helpful!",
+        "intent": "out_of_scope",
+    },
+    {
         "message": "Can you recommend a good trail running shoe for someone just starting out?",
         "intent": "product_search",
     },
@@ -111,11 +124,12 @@ def classify_intent(messages: list[dict], provider: LLMProvider) -> str:
     )
 
     # Inject few-shot examples as part of the system prompt
+    _examples = _ov("intent_few_shot_examples", INTENT_EXAMPLES)
     examples_text = "\n".join(
         f'Message: "{ex["message"]}"\nIntent: {ex["intent"]}'
-        for ex in INTENT_EXAMPLES
+        for ex in _examples
     )
-    system = INTENT_SYSTEM_PROMPT + f"\n\nExamples:\n{examples_text}"
+    system = _ov("intent_classification_prompt", INTENT_SYSTEM_PROMPT) + f"\n\nExamples:\n{examples_text}"
 
     llm_messages = [Message(role="user", content=f"Classify this conversation:\n\n{conversation}")]
 
@@ -130,6 +144,71 @@ def classify_intent(messages: list[dict], provider: LLMProvider) -> str:
 
 
 # ---------------------------------------------------------------------------
+# OOS sub-classification
+# ---------------------------------------------------------------------------
+
+OOS_SUBCLASS_SYSTEM_PROMPT = """\
+You are a safety and routing classifier for a retail outdoor gear chatbot.
+The customer's message has already been classified as out of scope (not about outdoor gear,
+orders, or related topics). Your task: assign it to one of three sub-categories and assess
+its complexity.
+
+Sub-categories:
+  social       — greetings, pleasantries, thanks, small talk, reactions, farewells.
+                 Examples: "Hi", "Thanks!", "How are you?", "You're so helpful", "Bye", "lol"
+  benign       — a genuine question or statement unrelated to outdoor gear, but harmless
+                 and factually answerable.
+                 Examples: "What's the capital of France?", "Explain how black holes work",
+                           "Who wrote Hamlet?", "How does inflation work?"
+  inappropriate — hostile, offensive, harmful, or manipulative content.
+                 Examples: insults, explicit content, jailbreak attempts, threats.
+
+Complexity (only meaningful for benign — always set "simple" for social and inappropriate):
+  simple  — the complete, accurate answer fits in 1–2 sentences.
+             Examples: "What's the capital of France?", "How many days in a leap year?"
+  complex — an accurate answer needs more than 2 sentences or nuanced explanation.
+             Examples: "Explain how mRNA vaccines work", "What caused World War I?"
+
+Return only the sub_class and complexity fields — no explanation."""
+
+
+class OOSSubClassResult(BaseModel):
+    sub_class: Literal["social", "benign", "inappropriate"] = Field(
+        description="The out-of-scope sub-category: social, benign, or inappropriate."
+    )
+    complexity: Literal["simple", "complex"] = Field(
+        description=(
+            "Complexity of the answer required. "
+            "Always 'simple' for social and inappropriate. "
+            "For benign: 'simple' if answerable in 1–2 sentences, 'complex' otherwise."
+        )
+    )
+
+
+def classify_oos_subtype(messages: list[dict], provider: LLMProvider) -> OOSSubClassResult:
+    """
+    Sub-classify an out-of-scope message into social / benign / inappropriate,
+    and assess answer complexity for benign messages.
+
+    Uses the fast model — this is a lightweight classification task.
+    Only called when intent == "out_of_scope".
+    """
+    # Only the last user turn matters for sub-classification
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+    llm_messages = [Message(role="user", content=f'Classify this message: "{last_user}"')]
+
+    return provider.complete_structured(
+        messages=llm_messages,
+        schema=OOSSubClassResult,
+        system=_ov("oos_subclass_system_prompt", OOS_SUBCLASS_SYSTEM_PROMPT),
+        temperature=_ov("oos_subclass_temperature", OOS_SUBCLASS_TEMPERATURE),
+        use_fast_model=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Context extraction
 # ---------------------------------------------------------------------------
 
@@ -140,10 +219,18 @@ Extract structured information from the customer's message(s).
 Rules:
   - Only extract information that is explicitly stated or very clearly implied.
   - Do NOT infer or guess. If a field is not mentioned, leave it null.
-  - activity must match a real outdoor activity (e.g. backpacking, winter_camping,
-    trail_running, rock_climbing, mountaineering, kayaking, skiing, cycling).
-    Use snake_case. If the activity is described but not named exactly, normalise it
-    (e.g. "car camping in the snow" → "winter_camping").
+  - activity must match a real outdoor activity using snake_case. Use the most specific
+    name that fits the context. Important normalisations:
+      "backcountry skiing", "ski touring", "uphill skiing"     → ski_touring
+      "backcountry snowboarding", "off-piste snowboarding"     → snowboarding_backcountry
+      "whitewater kayaking", "river kayaking", "rapids"        → whitewater_kayaking
+      "snowshoeing in/near avalanche terrain"                  → snowshoeing_avalanche_terrain
+      "avalanche safety", "avalanche gear", "avalanche rescue" → avalanche_safety
+      "alpine climbing", "alpine routes"                       → alpine_climbing
+      "car camping in the snow", "winter camping"              → winter_camping
+      "flatwater kayaking", "sea kayaking", "lake kayaking"    → kayaking
+      Other examples: backpacking, trail_running, rock_climbing, mountaineering,
+                      ice_climbing, cycling, skiing (resort).
   - experience_level: only set if the customer explicitly mentions their skill level,
     or uses language that clearly implies it (e.g. "I'm just starting out" → beginner,
     "I've done this for years" → expert). Controlled values: beginner, intermediate, expert.
@@ -186,6 +273,42 @@ EXTRACT_EXAMPLES: list[dict] = [
             "budget_usd": 400.0,
             "duration_days": 3,
             "group_size": 2,
+        },
+    },
+    {
+        "message": "I'm planning my first backcountry ski touring trip. What avalanche gear do I need?",
+        "extraction": {
+            "activity": "ski_touring",
+            "environment": None,
+            "conditions": "winter",
+            "experience_level": "beginner",
+            "budget_usd": None,
+            "duration_days": None,
+            "group_size": None,
+        },
+    },
+    {
+        "message": "I want to kayak whitewater class III and IV rapids. What safety gear do I need?",
+        "extraction": {
+            "activity": "whitewater_kayaking",
+            "environment": None,
+            "conditions": None,
+            "experience_level": None,
+            "budget_usd": None,
+            "duration_days": None,
+            "group_size": None,
+        },
+    },
+    {
+        "message": "I want to snowshoe in the backcountry near some avalanche terrain this winter.",
+        "extraction": {
+            "activity": "snowshoeing_avalanche_terrain",
+            "environment": None,
+            "conditions": "winter",
+            "experience_level": None,
+            "budget_usd": None,
+            "duration_days": None,
+            "group_size": None,
         },
     },
 ]
@@ -241,11 +364,12 @@ def extract_context(messages: list[dict], provider: LLMProvider) -> ExtractedCon
         f"{m['role'].upper()}: {m['content']}" for m in messages
     )
 
+    _exs = _ov("extraction_few_shot_examples", EXTRACT_EXAMPLES)
     examples_text = "\n\n".join(
         f'Message: "{ex["message"]}"\nExtraction: {ex["extraction"]}'
-        for ex in EXTRACT_EXAMPLES
+        for ex in _exs
     )
-    system = EXTRACT_SYSTEM_PROMPT + f"\n\nExamples:\n{examples_text}"
+    system = _ov("extraction_system_prompt", EXTRACT_SYSTEM_PROMPT) + f"\n\nExamples:\n{examples_text}"
 
     llm_messages = [Message(role="user", content=f"Extract context from this conversation:\n\n{conversation}")]
 
@@ -253,7 +377,7 @@ def extract_context(messages: list[dict], provider: LLMProvider) -> ExtractedCon
         messages=llm_messages,
         schema=ExtractionResult,
         system=system,
-        temperature=EXTRACT_TEMPERATURE,
+        temperature=_ov("extraction_temperature", EXTRACT_TEMPERATURE),
         use_fast_model=False,
     )
 
@@ -274,21 +398,57 @@ def extract_context(messages: list[dict], provider: LLMProvider) -> ExtractedCon
 
 def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
     """
-    LangGraph node: classify intent and extract context.
+    LangGraph node: classify intent, extract context, and sub-classify OOS messages.
 
-    Always runs on every turn. Extraction only runs for product_search intent.
+    Always runs on every turn. Secondary calls are conditional:
+      - extract_context()       only when intent == "product_search"
+      - classify_oos_subtype()  only when intent == "out_of_scope"
 
-    Returns a partial AgentState dict.
+    Returns a partial AgentState dict with intent, extracted_context,
+    oos_sub_class, and oos_complexity.
     """
     messages = state["messages"]
+    last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+    logger.info("[intent] query=%r", last_user[:120])
 
-    intent = classify_intent(messages, provider)
+    with stage_span("classify_and_extract", query=last_user[:200]):
 
-    extracted_context: Optional[ExtractedContext] = None
-    if intent == "product_search":
-        extracted_context = extract_context(messages, provider)
+        t0 = time.perf_counter()
+        intent = classify_intent(messages, provider)
+        logger.info("[intent] → intent=%s  (%.3fs)", intent, time.perf_counter() - t0)
 
-    return {
-        "intent": intent,
-        "extracted_context": extracted_context,
-    }
+        extracted_context: Optional[ExtractedContext] = None
+        if intent == "product_search":
+            t1 = time.perf_counter()
+            extracted_context = extract_context(messages, provider)
+            logger.info(
+                "[extraction] activity=%s  env=%s  conditions=%s  experience=%s  "
+                "budget=%s  duration=%s  group=%s  (%.3fs)",
+                extracted_context.activity,
+                extracted_context.environment,
+                extracted_context.conditions,
+                extracted_context.experience_level,
+                extracted_context.budget_usd,
+                extracted_context.duration_days,
+                extracted_context.group_size,
+                time.perf_counter() - t1,
+            )
+
+        oos_sub_class: Optional[str] = None
+        oos_complexity: Optional[str] = None
+        if intent == "out_of_scope":
+            t2 = time.perf_counter()
+            oos_result = classify_oos_subtype(messages, provider)
+            oos_sub_class = oos_result.sub_class
+            oos_complexity = oos_result.complexity
+            logger.info(
+                "[oos] sub_class=%s  complexity=%s  (%.3fs)",
+                oos_sub_class, oos_complexity, time.perf_counter() - t2,
+            )
+
+        return {
+            "intent": intent,
+            "extracted_context": extracted_context,
+            "oos_sub_class": oos_sub_class,
+            "oos_complexity": oos_complexity,
+        }

@@ -12,6 +12,9 @@ This document is kept up to date as the system is built out.
 4. [Running Evaluations](#4-running-evaluations)
 5. [Data Management](#5-data-management)
 6. [Development Workflow](#6-development-workflow)
+7. [Observability — Langfuse](#7-observability--langfuse)
+8. [Running the Feedback UI](#8-running-the-feedback-ui)
+9. [Running the Optimizer](#9-running-the-optimizer)
 
 ---
 
@@ -41,8 +44,10 @@ QDRANT_API_KEY=                             # leave blank for local Docker; requ
 DENSE_MODEL=BAAI/bge-small-en-v1.5
 SPARSE_MODEL=prithivida/Splade_PP_en_v1
 
-# Database
+# Database — production (LangGraph checkpoints + user summaries)
 POSTGRES_DSN=postgresql://user:pass@localhost:5432/sales_agent
+# Database — feedback tooling (separate DB — do not mix with production)
+FEEDBACK_POSTGRES_DSN=postgresql://user:pass@localhost:5432/sales_agent_feedback
 ```
 
 **LLM provider:** This project uses `LLM_PROVIDER=ollama` only.
@@ -85,9 +90,13 @@ docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
 # Create PostgreSQL database
 createdb sales_agent
 
-# Apply custom schema (user_summaries, etc.)
+# Create the production database (LangGraph checkpoints + user summaries)
 # LangGraph checkpoint tables are created automatically on first run
-psql sales_agent < db/schema.sql
+
+# Create the feedback database (separate from production — internal tooling only)
+createdb sales_agent_feedback
+# db/schema.sql is idempotent — safe to re-run (all statements use IF NOT EXISTS)
+psql sales_agent_feedback < db/schema.sql
 ```
 
 ### First-time catalog setup
@@ -149,10 +158,13 @@ All live as module-level constants in `pipeline/synthesizer.py`:
 
 | Constant | Default | Effect |
 |---|---|---|
-| `SYNTH_TEMPERATURE` | 0.4 | Response creativity — lower = safer/more factual, higher = more natural |
-| `SYNTH_MAX_TOKENS` | 1024 | Max response length |
+| `SYNTH_TEMPERATURE` | 0.4 | Response creativity — lower = safer/more factual, higher = more natural. Applies to all LLM paths including OOS. |
+| `SYNTH_MAX_TOKENS` | 1024 | Max response length for product_search and general_education |
+| `OOS_MAX_TOKENS` | 256 | Max response length for OOS (social + benign) — keeps answer + redirect brief |
 | `SYSTEM_PROMPT` | (see file) | Core REI specialist persona — primary optimizer lever |
 | `CONTEXT_TEMPLATE` | (see file) | How customer context fields are formatted in prompt |
+| `_OOS_SOCIAL_SYSTEM_PROMPT` | (see file) | Prompt for social messages (greetings, thanks, small talk) |
+| `_OOS_BENIGN_SYSTEM_PROMPT` | (see file) | Prompt for benign factual OOS questions |
 
 ### Safety flags
 
@@ -221,15 +233,60 @@ bash scripts/run_evals.sh
 bash scripts/run_evals.sh safety
 
 # Run a specific stage
-bash scripts/run_evals.sh intent       # intent classification (48 golden + 20 edge cases)
-bash scripts/run_evals.sh extraction   # context extraction (65 golden + 20 edge cases)
-bash scripts/run_evals.sh retrieval    # retrieval NDCG/MRR (25 seed queries — label first)
-bash scripts/run_evals.sh synthesis    # synthesis LLM judge (14 golden scenarios)
-bash scripts/run_evals.sh multiturn    # multi-turn coherence + degradation (8 convs + 11 scenarios)
+bash scripts/run_evals.sh intent        # intent classification (48 golden + 20 edge cases)
+bash scripts/run_evals.sh oos_subclass  # OOS sub-classification (32 golden: social/benign/inappropriate)
+bash scripts/run_evals.sh extraction    # context extraction (65 golden + 20 edge cases)
+bash scripts/run_evals.sh retrieval     # retrieval NDCG/MRR (25 seed queries — label first)
+bash scripts/run_evals.sh synthesis     # synthesis LLM judge (14 golden scenarios)
+bash scripts/run_evals.sh multiturn     # multi-turn coherence + degradation (8 convs + 13 scenarios)
 
 # Or invoke pytest directly
 pytest evals/tests/test_safety.py -m safety -v -s
 pytest evals/tests/test_synthesis.py -v -s
+
+# Optimizer smoke tests — run without any infrastructure (fully mocked)
+python -m pytest optimizer/tests/test_smoke.py -v
+```
+
+**Infrastructure skip behaviour:**
+All eval tests that call the LLM are marked `requires_ollama`. All tests that call Qdrant
+are marked `requires_qdrant`. If the service is unreachable the test is **skipped** (not
+failed) — you will see `s` in the pytest output instead of `E`.
+
+```
+SSSSSSSS  ← all eval tests skipped (Ollama not running)
+..........  ← optimizer smoke tests always run (no infra needed)
+```
+
+**Enabling pipeline logs:**
+Each pipeline stage logs at `INFO` level via Python's standard `logging` module.
+To see logs while running tests or the agent:
+
+```bash
+# pytest — show logs inline
+pytest evals/tests/ -v -s --log-cli-level=INFO
+
+# agent / scripts — enable in your shell before running
+export PYTHONPATH=.
+python -c "
+import logging
+logging.basicConfig(level=logging.INFO, format='%(name)s  %(message)s')
+from pipeline.agent import invoke
+print(invoke('I need a tent for winter camping in the Cascades'))
+"
+```
+
+Sample log output from a single query:
+```
+pipeline.intent      [intent] query='I need a tent for winter camping in the Cascades'
+pipeline.intent      [intent] → intent=product_search  (0.412s)
+pipeline.intent      [extraction] activity=winter_camping  env=alpine  conditions=winter  ...
+pipeline.translator  [translator] activity=winter_camping  source=ontology  categories=['sleep', 'camping']  ...
+pipeline.retriever   [retriever] k=8  alpha=0.50  query='winter camping alpine 4-season...'
+pipeline.retriever   [retriever] hits=8  top='Big Agnes Copper Spur HV UL2'  (0.203s)
+pipeline.synthesizer [synthesizer] intent=product_search  products=8
+pipeline.synthesizer [synthesizer] safety_flag=winter_camping applied
+pipeline.synthesizer [synthesizer] case=product_search  disclaimers=['winter_camping']  response_len=487  (1.821s)
 ```
 
 **Safety eval (Steps 4a + 4b):**
@@ -377,3 +434,333 @@ QDRANT_API_KEY  — Qdrant Cloud API key
 
 - Eval reports are written to `evals/reports/` (gitignored) and archived as CI artifacts
 - Optimizer runs are on a separate branch and require human review before merge
+
+---
+
+## 7. Running the Optimizer
+
+The optimizer runs as a Docker Compose stack. All services (optimizer, eval harness,
+pipeline API, MLflow, Ollama) are defined in `docker-compose.yml`.
+
+```bash
+# Start all services (first run pulls Ollama models — may take several minutes)
+docker-compose up -d
+
+# Pull required LLM models into the Ollama container
+docker-compose exec ollama ollama pull gemma2:9b
+docker-compose exec ollama ollama pull llama3.2
+
+# Open MLflow UI (experiment tracking, Pareto run comparison)
+open http://localhost:5000
+
+# Open Streamlit selection UI (Pareto scatter plots, run comparison)
+open http://localhost:8501
+```
+
+**Running optimization phases:**
+
+```bash
+# Phase 1 — numeric (Optuna over Class B + C parameters)
+# Tunes: retrieval_k, hybrid_alpha, synth_temperature, extract_temperature, etc.
+docker-compose exec optimizer python -m optimizer run --phase numeric --n-trials 50
+
+# Phase 2 — prompt (DSPy over Class A parameters)
+# Tunes: system prompts, few-shot examples — run after Phase 1 establishes a numeric baseline
+docker-compose exec optimizer python -m optimizer run --phase prompt --stage synthesizer
+docker-compose exec optimizer python -m optimizer run --phase prompt --stage intent
+
+# Phase 3 — data (LLM-assisted ontology expansion, Class D — additive-only)
+docker-compose exec optimizer python -m optimizer run --phase data
+```
+
+**Reviewing and promoting a candidate:**
+
+```bash
+# Browse the Pareto frontier (terminal table with overfit warnings)
+docker-compose exec optimizer python -m optimizer select
+
+# Run the final held-out test-split gate on a chosen experiment
+docker-compose exec optimizer python -m optimizer promote --experiment-id exp_042
+
+# Commit the selected parameter changes to a review branch
+docker-compose exec optimizer python -m optimizer commit \
+  --experiment-id exp_042 \
+  --branch optimize/numeric-run-001
+# → open a PR from this branch; human reviews the diff and merges
+```
+
+**Key constraints:**
+- The optimizer never pushes to `master` and never merges its own PRs
+- Class D (data) changes are queued for human approval before any file is written
+- MLflow tracks all experiments — browse history at `http://localhost:5000`
+- Budget cap: 50 experiments per run by default (configurable in `optimizer/config.yml`)
+
+---
+
+## 7. Observability — Langfuse
+
+Every agent turn generates a Langfuse trace with spans and LLM generations nested
+under each pipeline stage. This gives per-stage latency, token counts, and full
+prompt/completion logs with zero changes to production code.
+
+### What is traced
+
+```
+Trace (one per invoke() call)
+  └── span: classify_and_extract      classify_intent / extract_context / classify_oos_subtype
+  ├── span: translate_specs           ontology lookup or LLM fallback
+  ├── span: retrieve                  hybrid Qdrant search + spec re-ranking
+  └── span: synthesize                final response generation
+        └── generation: synthesize    prompt → completion, tokens, latency
+```
+
+Each LLM call inside a span is logged as a Langfuse `generation` with:
+- Full system prompt + message list
+- Completion text
+- Token counts (input / output)
+- Latency in ms
+
+### Option A — Self-hosted (recommended for local dev)
+
+```bash
+# Start Langfuse + its Postgres (profile: langfuse)
+docker compose --profile langfuse up -d
+
+# Visit http://localhost:3000 and create a project
+# Copy the project's public key and secret key into .env:
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=http://localhost:3000
+```
+
+### Option B — Cloud
+
+```bash
+# Sign up at langfuse.com, create a project, get keys
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+# Leave LANGFUSE_HOST unset — defaults to https://cloud.langfuse.com
+```
+
+### No observability (default for new dev)
+
+Leave `LANGFUSE_PUBLIC_KEY` unset (empty or absent). The pipeline uses no-op stubs —
+all `trace.span()`, `span.generation()`, `span.end()` calls are silent. Zero performance
+impact and no exceptions.
+
+### Python logs (always on)
+
+Each pipeline stage also writes structured logs via `logging.getLogger(__name__)`.
+To see them during development:
+
+```bash
+# Set in .env or export before running:
+LOG_LEVEL=INFO python -c "from pipeline.agent import invoke; invoke('test', 'I need a tent')"
+```
+
+Or configure your logging handler in the entry point:
+```python
+import logging
+logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+```
+
+---
+
+## 8. Running the Feedback UI
+
+The feedback UI is a Streamlit app for internal testers. It runs the full agent pipeline
+and captures per-turn ratings with the complete `AgentState` snapshot.
+
+### Prerequisites
+
+All standard pipeline prerequisites (Ollama, Qdrant, `POSTGRES_DSN`) plus:
+
+```bash
+# Install Streamlit (already in requirements.txt)
+pip install -r requirements.txt
+
+# Create the feedback database (separate from the production database)
+createdb sales_agent_feedback
+psql sales_agent_feedback < db/schema.sql
+
+# Add to .env
+FEEDBACK_POSTGRES_DSN=postgresql://user:pass@localhost:5432/sales_agent_feedback
+```
+
+### Start the app
+
+```bash
+streamlit run feedback/app.py
+# Opens at http://localhost:8501
+```
+
+### What testers see
+
+1. **Onboarding screen** — enter name and role (Gear Specialist / Developer / Product Manager / Other)
+2. **Chat screen** — chat with the agent; each assistant response shows 👍 / 👎 buttons
+3. **👎 annotation** — optional expander: "what went wrong?" stage selector, per-product
+   relevance toggles (0 / 1 / 2), free-text correction
+4. **End conversation** — optional overall rating (1–5) in the sidebar
+
+Thumbs rating is required before sending the next message. Everything else is optional.
+
+### Reviewing feedback
+
+```bash
+# Aggregation report (Markdown to stdout — redirect to file to share)
+python scripts/analyze_feedback.py
+python scripts/analyze_feedback.py --since 2026-03-18
+python scripts/analyze_feedback.py --since 2026-03-18 --role gear_specialist
+python scripts/analyze_feedback.py > evals/reports/feedback_$(date +%F).md
+
+# Promote thumbs-down events to STAGING files (interactive CLI)
+# Writes to evals/datasets/*/staging.jsonl — NOT to golden sets
+python scripts/promote_feedback.py                      # all unpromoted 👎 events
+python scripts/promote_feedback.py --stage retrieval    # only retrieval failures
+python scripts/promote_feedback.py --since 2026-03-18   # only recent events
+# Controls: [y] promote  [n/s] skip  [q] quit
+
+# After reviewing staging.jsonl, graduate verified entries to golden.jsonl manually:
+#   1. Open evals/datasets/<stage>/staging.jsonl
+#   2. Copy entries you are confident are correct ground truth to golden.jsonl
+#   3. Run bash scripts/run_evals.sh to confirm no regressions
+# golden.jsonl = small, curated, CI-gated
+# staging.jsonl = grows freely, used for manual/extended eval runs only
+```
+
+### Reset between testing rounds
+
+```bash
+dropdb sales_agent_feedback
+createdb sales_agent_feedback
+psql sales_agent_feedback < db/schema.sql
+```
+
+This drops all feedback data without touching the production `sales_agent` database.
+
+---
+
+## 9. Running the Optimizer
+
+### Prerequisites
+
+```bash
+pip install -r requirements-optimizer.txt
+```
+
+MLflow tracking server (choose one):
+
+```bash
+# Option A — local process (simplest for development)
+mlflow server --host 127.0.0.1 --port 5001 \
+  --backend-store-uri sqlite:///optimizer/reports/mlflow.db \
+  --default-artifact-root optimizer/reports/artifacts
+# UI available at http://localhost:5001
+
+# Option B — Docker (full stack, mirrors production)
+docker compose --profile optimizer up -d mlflow
+```
+
+### Capturing the baseline
+
+```bash
+# Capture baseline eval scores (run once before any optimizer trials)
+# Reuses cached result if pipeline files have not changed since last capture
+python -m optimizer baseline-cmd
+
+# Baseline is stored at optimizer/reports/baseline.json
+# Fields: dev_scores, val_scores, commit_hash, timestamp
+```
+
+### Running an optimization phase
+
+```bash
+# Numeric phase (Class B + C parameters — temperatures, k, alpha)
+# Baseline is automatically captured/reused at the start of each run
+python -m optimizer run --phase numeric --n-trials 50
+
+# Prompt phase (Class A — prompts + few-shot examples, per stage)
+python -m optimizer run --phase prompt --stage intent --n-trials 20
+python -m optimizer run --phase prompt --stage extraction --n-trials 20
+python -m optimizer run --phase prompt --stage synthesis --n-trials 20
+
+# Data phase (Class D — ontology + safety flags, LLM agent)
+python -m optimizer run --phase data
+```
+
+All phases print progress to stdout via Rich. Trial results stream to MLflow in real time.
+
+### Reviewing the Pareto frontier and promoting a candidate
+
+```bash
+# Interactive: load frontier from last run, show Rich table, pick trial, run test split
+python -m optimizer select
+
+# Pick a specific trial number (skip the prompt)
+python -m optimizer select --trial 42
+
+# Browse a specific MLflow experiment instead of last-run frontier
+python -m optimizer select --experiment-name optimizer/numeric/20260318T120000
+
+# Non-interactive: run test-split gate directly on a known experiment
+python -m optimizer promote --experiment-id optimizer/numeric/20260318T120000
+
+# MLflow web UI (run comparison, parameter importance)
+open http://localhost:5001
+```
+
+After `select` or `promote`, the chosen trial is saved to
+`optimizer/reports/selection.json`.
+
+### Committing a candidate to a review branch
+
+```bash
+# Apply winning parameter changes and commit (reads optimizer/reports/selection.json)
+python -m optimizer commit --branch optimize/run-001
+
+# Specify experiment explicitly (overrides selection.json label in commit message)
+python -m optimizer commit --experiment-id optimizer/numeric/20260318T120000 --branch optimize/run-001
+
+# Push and open PR for human review
+git push origin optimize/run-001
+gh pr create --base master --head optimize/run-001 --title "Optimizer run 001: +3.2% intent F1"
+```
+
+The optimizer never pushes to main and never merges its own PRs.
+
+**Guard check output** — every `guard_every_n` trials (default 10), the optimizer prints a
+correlation health check. If any Pareto dimension shows `r < 0.70` between dev and val scores
+across all completed trials, a yellow warning is printed. This is an early indicator of
+eval-set overfitting; consider stopping the run early if multiple dimensions diverge.
+
+### Full containerised run
+
+```bash
+# Build and start all optimizer services
+docker compose --profile optimizer up --build -d
+
+# Run optimization inside the container
+docker compose exec optimizer python -m optimizer run --phase numeric --n-trials 50
+
+# Tear down
+docker compose --profile optimizer down
+```
+
+### Subprocess mode vs HTTP mode
+
+| Mode | When to use | Config |
+|------|-------------|--------|
+| Subprocess (default) | Local dev — optimizer and eval harness in same process | `eval_endpoint: ""` in `optimizer/config.yml` |
+| HTTP | Docker / CI — optimizer and eval harness in separate containers | `eval_endpoint: http://eval-harness:8080/score` |
+
+Switch by editing `eval_endpoint` in `optimizer/config.yml`.
+
+### Review Class D (data) proposals
+
+```bash
+python -m optimizer review-data
+# Lists pending data proposals (activity_to_specs and safety_flags additions)
+# For each proposal: a=approve, r=reject, s=skip (decide later)
+# Approved proposals are written immediately to data/ontology/
+# Queue is persisted at optimizer/reports/data_proposals.json
+```

@@ -36,14 +36,14 @@ from pipeline.embeddings import FastEmbedProvider, default_provider
 from pipeline.models import Product
 
 COLLECTION_NAME = "products"
-BATCH_SIZE = 64  # Products per embedding + upsert batch. Lower if OOM on CPU.
+BATCH_SIZE = 512  # Products per embedding + upsert batch. GPU can handle large batches.
 
 
 def get_qdrant_client():
     from qdrant_client import QdrantClient
     url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    api_key = os.getenv("QDRANT_API_KEY")  # None for local dev — Qdrant ignores it
-    return QdrantClient(url=url, api_key=api_key)
+    api_key = os.getenv("QDRANT_API_KEY") or None  # empty string → None for local dev
+    return QdrantClient(url=url, api_key=api_key, timeout=60)
 
 
 def create_collection(client, dense_dimensions: int) -> None:
@@ -205,7 +205,7 @@ def main() -> None:
 
         indexed += len(batch)
         pct = indexed / total * 100
-        print(f"  [{pct:5.1f}%] {indexed}/{total} products indexed", end="\r")
+        print(f"  [{pct:5.1f}%] {indexed}/{total} products indexed", flush=True)
 
     print(f"\n\nDone. {indexed} products indexed into '{COLLECTION_NAME}'.")
     print(f"Qdrant: {os.getenv('QDRANT_URL', 'http://localhost:6333')}")

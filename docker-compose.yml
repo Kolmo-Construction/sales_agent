@@ -1,0 +1,153 @@
+version: "3.9"
+
+# REI Sales Agent — full stack for optimizer runs
+#
+# Local development (subprocess mode, no containers needed):
+#   python -m optimizer run --phase numeric
+#
+# Full containerised run (HTTP mode):
+#   docker compose up --build
+#   docker compose exec optimizer python -m optimizer run --phase numeric --n-trials 50
+#
+# Optimizer selects from Pareto frontier:
+#   docker compose exec optimizer python -m optimizer select
+#
+# Required env vars (copy from .env.example):
+#   QDRANT_URL, QDRANT_API_KEY, POSTGRES_DSN, FEEDBACK_POSTGRES_DSN
+
+services:
+
+  # ── Optimizer ────────────────────────────────────────────────────────────────
+  optimizer:
+    build:
+      context: .
+      dockerfile: optimizer/Dockerfile
+    volumes:
+      - ./optimizer/config.yml:/app/optimizer/config.yml
+      - ./optimizer/parameter_catalog.json:/app/optimizer/parameter_catalog.json
+      - ./evals/datasets:/app/evals/datasets
+      - optimizer-reports:/app/optimizer/reports
+    environment:
+      - EVAL_ENDPOINT=http://eval-harness:8080/score
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    depends_on:
+      - eval-harness
+      - mlflow
+    profiles:
+      - optimizer
+
+  # ── Eval harness ─────────────────────────────────────────────────────────────
+  eval-harness:
+    build:
+      context: .
+      dockerfile: evals/Dockerfile
+    volumes:
+      - ./evals/datasets:/app/evals/datasets
+      - ./pipeline:/app/pipeline:ro
+      - ./data:/app/data:ro
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ollama
+    profiles:
+      - optimizer
+
+  # ── MLflow tracking server ────────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    volumes:
+      - mlflow-data:/mlflow
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri sqlite:///mlflow/mlflow.db
+        --default-artifact-root /mlflow/artifacts
+    ports:
+      - "5001:5000"   # 5001 on host to avoid clashes with other services
+    profiles:
+      - optimizer
+
+  # ── Ollama (local LLM) ────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    profiles:
+      - optimizer
+
+  # ── Langfuse observability ────────────────────────────────────────────────────
+  langfuse:
+    image: langfuse/langfuse:latest
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: changeme-local-dev-secret
+      SALT: changeme-local-dev-salt
+    ports:
+      - "3000:3000"
+    depends_on:
+      - langfuse-db
+    profiles:
+      - langfuse
+
+  langfuse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    profiles:
+      - langfuse
+
+  # ── Feedback PostgreSQL (internal testers) ────────────────────────────────────
+  feedback-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sales_agent_feedback
+    ports:
+      - "5433:5432"
+    volumes:
+      - feedback-db-data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    profiles:
+      - feedback
+
+  # ── Feedback Streamlit UI ─────────────────────────────────────────────────────
+  feedback-ui:
+    build:
+      context: .
+      dockerfile: feedback/Dockerfile
+    environment:
+      - FEEDBACK_POSTGRES_DSN=postgresql://postgres:postgres@feedback-db:5432/sales_agent_feedback
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+    ports:
+      - "8501:8501"
+    depends_on:
+      - feedback-db
+    profiles:
+      - feedback
+
+volumes:
+  optimizer-reports:
+  mlflow-data:
+  ollama-models:
+  langfuse-db-data:
+  feedback-db-data:

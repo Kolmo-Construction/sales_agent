@@ -7,6 +7,7 @@
 #   bash scripts/run_evals.sh safety       # safety gate only (fast, used in PR checks)
 #   bash scripts/run_evals.sh intent       # single suite
 #   bash scripts/run_evals.sh synthesis    # synthesis LLM judge suite
+#   bash scripts/run_evals.sh oos_subclass # OOS sub-classification suite
 #   bash scripts/run_evals.sh multiturn    # multi-turn + degradation suite
 
 set -euo pipefail
@@ -24,9 +25,10 @@ fi
 
 case "$SUITE" in
     all)
-        echo "=== Running full eval suite (safety → intent → extraction → retrieval → synthesis → multiturn) ==="
+        echo "=== Running full eval suite (safety → intent → oos_subclass → extraction → retrieval → synthesis → multiturn) ==="
         pytest evals/tests/test_safety.py \
                evals/tests/test_intent.py \
+               evals/tests/test_oos_subclass.py \
                evals/tests/test_extraction.py \
                evals/tests/test_retrieval.py \
                evals/tests/test_synthesis.py \
@@ -53,13 +55,17 @@ case "$SUITE" in
         echo "=== Running synthesis eval (LLM judge — requires Ollama + gemma2:9b) ==="
         pytest evals/tests/test_safety.py evals/tests/test_synthesis.py -v -s
         ;;
+    oos_subclass)
+        echo "=== Running OOS sub-classification eval (requires Ollama + llama3.2) ==="
+        pytest evals/tests/test_safety.py evals/tests/test_oos_subclass.py -v -s
+        ;;
     multiturn)
         echo "=== Running multi-turn + degradation eval (requires Ollama; Qdrant for requires_qdrant tests) ==="
         pytest evals/tests/test_safety.py evals/tests/test_multiturn.py -v -s
         ;;
     *)
         echo "Unknown suite: $SUITE"
-        echo "Usage: $0 [all|safety|intent|extraction|retrieval|synthesis|multiturn]"
+        echo "Usage: $0 [all|safety|intent|extraction|retrieval|synthesis|multiturn|oos_subclass]"
         exit 1
         ;;
 esac

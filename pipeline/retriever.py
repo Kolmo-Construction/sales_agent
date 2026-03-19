@@ -34,12 +34,18 @@ If retrieval returns zero results:
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from pipeline.embeddings import EmbeddingProvider
 from pipeline.models import Product, ProductSpecs
+from pipeline.overrides import get as _ov
 from pipeline.state import AgentState
+from pipeline.tracing import stage_span
 
 # ---------------------------------------------------------------------------
 # Module-level constants — all tuneable parameters live here
@@ -73,7 +79,7 @@ SPEC_RERANK_WEIGHT: float = 0.3
 def _get_client():
     from qdrant_client import QdrantClient
     url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    api_key = os.getenv("QDRANT_API_KEY")
+    api_key = os.getenv("QDRANT_API_KEY") or None
     return QdrantClient(url=url, api_key=api_key)
 
 
@@ -206,8 +212,8 @@ def _build_combined_filter(
 def search(
     query_specs: ProductSpecs,
     embedding_provider: EmbeddingProvider,
-    k: int = RETRIEVAL_K,
-    alpha: float = HYBRID_ALPHA,
+    k: int | None = None,
+    alpha: float | None = None,
     apply_filters: bool = True,
 ) -> list[Product]:
     """
@@ -230,6 +236,11 @@ def search(
     from qdrant_client.models import Prefetch, SparseVector
     from qdrant_client.models import Fusion, FusionQuery
 
+    # Apply optimizer overrides for tuneable retrieval params
+    _k     = _ov("retrieval_k", RETRIEVAL_K) if k is None else k
+    _alpha = _ov("hybrid_alpha", HYBRID_ALPHA) if alpha is None else alpha
+    _thresh = _ov("score_threshold", SCORE_THRESHOLD)
+
     search_query: str = query_specs.extra.get("search_query", "outdoor gear")
     required_categories: list[str] = query_specs.extra.get("required_categories", [])
     budget_usd_max: float | None = query_specs.extra.get("budget_usd_max")
@@ -241,11 +252,11 @@ def search(
     )
 
     # Candidate pool size per index before fusion
-    prefetch_k = k * PREFETCH_MULTIPLIER
+    prefetch_k = _k * PREFETCH_MULTIPLIER
 
     # Scale candidate counts by alpha
-    dense_k = max(1, round(prefetch_k * alpha)) if alpha > 0 else 0
-    sparse_k = max(1, round(prefetch_k * (1 - alpha))) if alpha < 1 else 0
+    dense_k = max(1, round(prefetch_k * _alpha)) if _alpha > 0 else 0
+    sparse_k = max(1, round(prefetch_k * (1 - _alpha))) if _alpha < 1 else 0
 
     prefetches = []
     if dense_k > 0:
@@ -278,9 +289,9 @@ def search(
         collection_name=COLLECTION_NAME,
         prefetch=prefetches,
         query=FusionQuery(fusion=Fusion.RRF),
-        limit=k,
+        limit=_k,
         with_payload=True,
-        score_threshold=SCORE_THRESHOLD if SCORE_THRESHOLD > 0 else None,
+        score_threshold=_thresh if _thresh > 0 else None,
         query_filter=query_filter,
     )
 
@@ -337,28 +348,48 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
 
     if query_specs is None:
         # Should not happen — graph routing prevents this
+        logger.warning("[retriever] translated_specs is None — returning empty product list")
         return {"retrieved_products": []}
 
-    # Primary search with full filters
-    products = search(
-        query_specs=query_specs,
-        embedding_provider=embedding_provider,
-        k=RETRIEVAL_K,
-        alpha=HYBRID_ALPHA,
-        apply_filters=True,
-    )
+    with stage_span("retrieve", search_query=query_specs.extra.get("search_query", "")[:120]):
 
-    # Fallback: retry without filters if nothing came back
-    if not products:
+        t0 = time.perf_counter()
+        _k     = _ov("retrieval_k", RETRIEVAL_K)
+        _alpha = _ov("hybrid_alpha", HYBRID_ALPHA)
+        search_query = query_specs.extra.get("search_query", "outdoor gear")
+        logger.info("[retriever] k=%d  alpha=%.2f  query=%r", _k, _alpha, search_query[:80])
+
+        # Primary search with full filters
         products = search(
             query_specs=query_specs,
             embedding_provider=embedding_provider,
             k=RETRIEVAL_K,
             alpha=HYBRID_ALPHA,
-            apply_filters=False,
+            apply_filters=True,
         )
 
-    # Spec re-ranking
-    products = _rerank(products, query_specs)
+        # Fallback: retry without filters if nothing came back
+        if not products:
+            logger.info("[retriever] zero results with filters — retrying without filters")
+            products = search(
+                query_specs=query_specs,
+                embedding_provider=embedding_provider,
+                k=RETRIEVAL_K,
+                alpha=HYBRID_ALPHA,
+                apply_filters=False,
+            )
 
-    return {"retrieved_products": products}
+        # Spec re-ranking
+        products = _rerank(products, query_specs)
+
+        elapsed = time.perf_counter() - t0
+        if products:
+            top = products[0]
+            logger.info(
+                "[retriever] hits=%d  top=%r (score=n/a)  (%.3fs)",
+                len(products), top.title[:60], elapsed,
+            )
+        else:
+            logger.warning("[retriever] zero results after fallback retry  (%.3fs)", elapsed)
+
+        return {"retrieved_products": products}

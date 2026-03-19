@@ -10,7 +10,8 @@ anthropic>=0.40.0                    # production — Claude API
 # llama-cpp-python>=0.2.0            # required by outlines llamacpp backend
 
 # Vector store + embeddings
-qdrant-client[fastembed]>=1.9.0      # includes FastEmbed for local CPU embeddings
+qdrant-client[fastembed]>=1.9.0      # includes FastEmbed for local embeddings
+onnxruntime-gpu>=1.19.0             # GPU-accelerated ONNX inference (replaces onnxruntime CPU)
 
 # Agent orchestration + state
 langgraph>=0.2.0
@@ -21,7 +22,10 @@ psycopg[binary]>=3.1                 # PostgreSQL driver for LangGraph checkpoin
 deepeval>=1.0.0                      # test harness, LLM-as-judge, CI gates
 ragas>=0.1.0                         # RAG-specific metrics (faithfulness, context precision)
 scikit-learn>=1.3                    # classification + retrieval metrics
-arize-phoenix>=4.0.0                 # pipeline tracing per stage
+langfuse>=2.0.0                      # pipeline tracing per stage (self-hosted or cloud)
+
+# Feedback UI
+streamlit>=1.35.0                    # internal tester chat interface (feedback/app.py)
 
 # Utilities
 python-dotenv>=1.0                   # .env loading

@@ -10,6 +10,13 @@ single_followup_check(response)         — exactly 1 "?" in the response
 repeated_question_check(followup, msgs) — key terms from followup answered in prior msgs
 context_fields_present(state_dict, exp) — expected_fields all non-null in extracted_context
 oos_deflection_check(response)          — deflection language present, no product pitch
+                                          (legacy — kept for backward compat)
+oos_inappropriate_check(response)       — hard-coded rejection language present, no pitch
+                                          Use for: inappropriate OOS
+oos_social_check(response)              — warm/inviting response, no deflection, no pitch
+                                          Use for: social OOS (greetings, thanks, small talk)
+oos_benign_check(response)              — substantive content + redirect, no product pitch
+                                          Use for: benign OOS (factual questions)
 zero_result_check(response, products)   — no invented product when retrieved_products=[]
 contradictory_flag(response, budget)    — budget-conflict language present in response
 """
@@ -141,19 +148,95 @@ _PRODUCT_PITCH_PATTERNS: tuple[str, ...] = (
 
 
 def oos_deflection_check(response: str) -> bool:
-    """Return True if the response deflects an out-of-scope question cleanly.
+    """Return True if the response hard-deflects an inappropriate OOS message.
+
+    Use this check for the inappropriate sub-class only. For social and benign
+    OOS, use oos_social_check() and oos_benign_check() respectively — those paths
+    produce an actual response, so deflection phrases would be a false failure.
 
     Passes when:
     - At least one deflection phrase is present, AND
     - No obvious product-pitch language is present.
 
-    Limitation: a creatively-phrased deflection without the expected keywords
+    Limitation: a creatively-phrased rejection without the expected keywords
     will be a false negative. Complement with manual review on the first run.
     """
     lower = response.lower()
     has_deflection = any(phrase in lower for phrase in _DEFLECTION_PHRASES)
     has_pitch = any(re.search(pat, lower) for pat in _PRODUCT_PITCH_PATTERNS)
     return has_deflection and not has_pitch
+
+
+_SOCIAL_REDIRECT_WORDS: tuple[str, ...] = (
+    "help", "gear", "adventure", "trip", "looking", "find", "outdoor",
+    "assist", "next", "plan", "explore", "trail", "hike",
+)
+
+
+def oos_social_check(response: str) -> bool:
+    """Return True if the response handles a social message warmly without deflecting.
+
+    A good social response (greeting, thanks, small talk):
+    - Does NOT use deflection phrases ("outside what I can help with", etc.)
+    - Does NOT pitch specific products unprompted
+    - DOES contain an invitation or redirect toward gear / adventure topics
+
+    Limitation: does not verify warmth or naturalness — complement with persona eval.
+    """
+    lower = response.lower()
+    has_deflection = any(phrase in lower for phrase in _DEFLECTION_PHRASES)
+    has_pitch = any(re.search(pat, lower) for pat in _PRODUCT_PITCH_PATTERNS)
+    has_redirect = any(word in lower for word in _SOCIAL_REDIRECT_WORDS) or "?" in response
+    return not has_deflection and not has_pitch and has_redirect
+
+
+_INAPPROPRIATE_REJECT_PHRASES: tuple[str, ...] = (
+    "keep things on that track",
+    "keep this on track",
+    "let's keep",
+    "here to help with outdoor",
+    "help with outdoor gear",
+    "outdoor gear and adventures",
+    "on that track",
+)
+
+
+def oos_inappropriate_check(response: str) -> bool:
+    """Return True if the response correctly hard-rejects an inappropriate message.
+
+    The inappropriate path returns a hard-coded string (no LLM call), so this
+    check looks for the characteristic language of that response rather than
+    generic deflection phrases. It also verifies no product was pitched.
+
+    Passes when:
+    - At least one characteristic phrase from the hard-coded rejection is present, AND
+    - No product-pitch language is present.
+    """
+    lower = response.lower()
+    has_rejection_language = any(phrase in lower for phrase in _INAPPROPRIATE_REJECT_PHRASES)
+    has_pitch = any(re.search(pat, lower) for pat in _PRODUCT_PITCH_PATTERNS)
+    return has_rejection_language and not has_pitch
+
+
+def oos_benign_check(response: str) -> bool:
+    """Return True if the response handles a benign OOS question appropriately.
+
+    A good benign response:
+    - Does NOT pitch specific products unprompted
+    - Has substantive content (≥ 15 words — more than a one-line deflection)
+    - DOES contain a redirect toward gear / adventure topics
+
+    Does NOT require deflection phrases — the model is expected to answer the
+    question before redirecting. Using oos_deflection_check here would be wrong.
+
+    Limitation: word count is a proxy for 'answered the question'. Complement
+    with manual review on the first baseline run.
+    """
+    lower = response.lower()
+    has_pitch = any(re.search(pat, lower) for pat in _PRODUCT_PITCH_PATTERNS)
+    has_redirect = any(word in lower for word in _SOCIAL_REDIRECT_WORDS) or "?" in response
+    has_content = len(response.split()) >= 15
+    return not has_pitch and has_redirect and has_content
 
 
 # ---------------------------------------------------------------------------

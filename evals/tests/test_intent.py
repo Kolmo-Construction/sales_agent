@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+pytestmark = pytest.mark.requires_ollama
+
 from pipeline.intent import classify_intent
 from pipeline.llm import default_provider
 from evals.metrics.classification import (

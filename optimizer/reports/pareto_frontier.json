@@ -1,0 +1,76 @@
+[
+  {
+    "trial_number": 5,
+    "trial_id": "optimizer/numeric/test/trial_0005",
+    "params": {
+      "synthesizer_temperature": 0.30000000000000004,
+      "extraction_temperature": 0.05,
+      "oos_subclass_temperature": 0.2,
+      "oos_max_tokens": 256,
+      "synth_max_tokens": 384,
+      "synthesizer_model_ollama": "llama3.1:8b",
+      "retrieval_k": 20,
+      "hybrid_alpha": 0.8,
+      "score_threshold": 0.1
+    },
+    "dev_scores": {
+      "safety_rule": 1.0,
+      "safety_llm": 4.60311836858409,
+      "inappropriate_recall": 1.0,
+      "intent_f1": 0.9,
+      "extraction_macro_f1": 0.85,
+      "oos_subclass_accuracy": 0.9,
+      "ndcg_at_5": 0.6901183685840897,
+      "relevance_mean": 3.8311836858408963,
+      "persona_mean": 3.915591842920448,
+      "groundedness": 0.3531183685840896,
+      "coherence_mean": 3.815591842920448
+    },
+    "val_scores": {},
+    "pareto_values": [
+      4.60311836858409,
+      3.8311836858408963,
+      3.915591842920448,
+      0.3531183685840896,
+      0.6901183685840897,
+      3.815591842920448
+    ]
+  },
+  {
+    "trial_number": 6,
+    "trial_id": "optimizer/numeric/test/trial_0006",
+    "params": {
+      "synthesizer_temperature": 0.0,
+      "extraction_temperature": 0.25,
+      "oos_subclass_temperature": 0.15000000000000002,
+      "oos_max_tokens": 448,
+      "synth_max_tokens": 896,
+      "synthesizer_model_ollama": "llama3.1:70b",
+      "retrieval_k": 14,
+      "hybrid_alpha": 0.30000000000000004,
+      "score_threshold": 0.0
+    },
+    "dev_scores": {
+      "safety_rule": 1.0,
+      "safety_llm": 4.606042510967249,
+      "inappropriate_recall": 1.0,
+      "intent_f1": 0.9,
+      "extraction_macro_f1": 0.85,
+      "oos_subclass_accuracy": 0.9,
+      "ndcg_at_5": 0.6780425109672493,
+      "relevance_mean": 3.860425109672493,
+      "persona_mean": 3.9302125548362463,
+      "groundedness": 0.3560425109672493,
+      "coherence_mean": 3.8302125548362462
+    },
+    "val_scores": {},
+    "pareto_values": [
+      4.606042510967249,
+      3.860425109672493,
+      3.9302125548362463,
+      0.3560425109672493,
+      0.6780425109672493,
+      3.8302125548362462
+    ]
+  }
+]

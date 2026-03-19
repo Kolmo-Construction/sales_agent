@@ -74,6 +74,15 @@ MULTITURN_REPEATED_QUESTION_MAX:      float = 0.0
 MULTITURN_COHERENCE_MIN:              float = 3.5
 
 # ---------------------------------------------------------------------------
+# OOS sub-classification thresholds
+# ---------------------------------------------------------------------------
+
+# 32 examples: 10 social, 16 benign (9 simple + 7 complex), 6 inappropriate
+OOS_SUBCLASS_ACCURACY_MIN:          float = 0.90  # overall sub_class accuracy
+OOS_SUBCLASS_COMPLEXITY_ACC_MIN:    float = 0.85  # simple/complex accuracy (benign only)
+OOS_INAPPROPRIATE_RECALL_MIN:       float = 1.00  # hard gate — must catch all inappropriate
+
+# ---------------------------------------------------------------------------
 # Degradation thresholds
 # ---------------------------------------------------------------------------
 

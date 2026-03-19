@@ -25,6 +25,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+pytestmark = pytest.mark.requires_ollama
+
 from pipeline.intent import extract_context
 from pipeline.llm import default_provider
 from evals.metrics.extraction import (

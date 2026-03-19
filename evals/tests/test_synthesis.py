@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.requires_ollama
+
 from evals.config import (
     SYNTHESIS_GROUNDING_MIN,
     SYNTHESIS_HALLUCINATION_MAX,

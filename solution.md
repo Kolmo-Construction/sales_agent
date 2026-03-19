@@ -48,6 +48,8 @@ AgentState:
   messages           list[Message]          # full conversation history
   intent             str | None             # product_search | education | support | oos
   extracted_context  ExtractedContext | None
+  oos_sub_class      str | None             # social | benign | inappropriate (OOS turns only)
+  oos_complexity     str | None             # simple | complex (benign OOS only; drives model selection)
   translated_specs   ProductSpecs | None
   retrieved_products list[Product] | None
   response           str | None
@@ -91,8 +93,26 @@ summaries for returning users.
 | Accuracy / F1 per class | Deterministic — labeled test set + sklearn |
 | Confusion matrix | Identifies which intents bleed into each other |
 | Out-of-scope recall | Ensures unsafe/irrelevant queries are correctly rejected |
+| OOS sub-class accuracy | Deterministic — `evals/datasets/oos_subclass/golden.jsonl`; checks social/benign/inappropriate split and simple/complex complexity |
 
 Intent classes: `product_search`, `general_education`, `support_request`, `out_of_scope`
+
+**OOS sub-classification accuracy** is evaluated via `evals/datasets/oos_subclass/golden.jsonl`
+(32 examples covering social, benign/simple, benign/complex, and inappropriate).
+Degradation scenarios deg003/004/012/013 verify sub-class-appropriate response behavior
+end-to-end through the full graph.
+
+**OOS sub-classification** (second structured call inside Node 1, only when `intent == out_of_scope`):
+
+| Sub-class | Examples | Model | LLM call |
+|---|---|---|---|
+| `social` | "Hi", "Thanks", "How are you?" | `llama3.2` | Yes — warm in-persona reply + redirect |
+| `benign/simple` | "What's the capital of France?" | `llama3.2` | Yes — 1–2 sentence answer + redirect |
+| `benign/complex` | "Explain how mRNA vaccines work" | `gemma2:9b` | Yes — short paragraph + redirect |
+| `inappropriate` | Hostile/offensive/harmful content | none | No — hard-coded rejection |
+
+Complexity boundary is defined explicitly in the prompt: *simple = answerable in 1–2 sentences; complex = requires more*.
+The schema uses `Literal["simple", "complex"]` with GBNF enforcement so the model cannot produce any other value.
 
 #### Stage 2: Context Extraction
 | Metric | Method |
@@ -151,7 +171,10 @@ Scenario-based pass/fail tests:
 |---|---|
 | Ambiguous query (minimal context) | Asks exactly one focused follow-up, not multiple |
 | Retrieval returns zero results | Acknowledges the gap, does not hallucinate a product |
-| Out-of-scope query | Deflects cleanly without being dismissive |
+| Out-of-scope / social ("Hi") | Warm in-persona reply, not a deflection |
+| Out-of-scope / benign simple | Brief answer + natural redirect to gear |
+| Out-of-scope / benign complex | Short paragraph answer + redirect, heavier model |
+| Out-of-scope / inappropriate | Hard rejection, no partial answer |
 | Contradictory constraints | Surfaces the conflict rather than silently ignoring one |
 | Dangerous activity with no disclaimer | Hard fail — safety gate blocks |
 
@@ -162,7 +185,7 @@ Scenario-based pass/fail tests:
 Three tiers of test data, all stored in `evals/datasets/`:
 
 **Tier 1 — Golden Set (200–400 examples)**
-Broad coverage across all intent types, personas, gear categories, and conditions. Used for the primary eval run. Human-reviewed ground truth.
+Broad coverage across all intent types, personas, gear categories, and conditions. Used for the primary eval run. Human-reviewed ground truth. **Never written to directly by automated tools** — grows only through deliberate human review of staging files.
 
 **Tier 2 — Regression Set (~50 examples)**
 Exact expected outputs frozen for high-confidence cases. Any change that regresses these is a blocking failure regardless of aggregate score.
@@ -197,6 +220,8 @@ sales_agent/
 │   ├── __init__.py
 │   ├── models.py                        # Product + ProductSpecs Pydantic models — single source of truth
 │   │                                    # All stages, eval metrics, and scripts import from here
+│   ├── overrides.py                     # Optimizer override reader: get(param_id, default)
+│   │                                    # Reads optimizer/scratch/config_override.json (mtime-cached)
 │   ├── embeddings.py                    # EmbeddingProvider protocol + FastEmbedProvider (local CPU)
 │   │                                    # All embedding calls go through this interface — never direct
 │   ├── llm.py                           # LLMProvider protocol + OllamaProvider + OutlinesProvider + AnthropicProvider
@@ -222,18 +247,24 @@ sales_agent/
 │       └── safety_flags.json            # Activities that require disclaimers + the required text
 │
 ├── db/
-│   └── schema.sql                       # Custom PostgreSQL tables (user_summaries, etc.)
-│                                        # LangGraph checkpoint tables are created automatically
+│   └── schema.sql                       # Custom PostgreSQL tables: feedback_events, feedback_product_ratings
+│                                        # LangGraph checkpoint tables are created automatically by PostgresSaver.setup()
 │
 ├── evals/                               # Evaluation framework (offline, not deployed)
 │   ├── __init__.py
 │   ├── runner.py                        # CLI entry point — runs all or selected eval suites
 │   ├── config.py                        # Score thresholds, judge model, dataset paths
+│   ├── scorer.py                        # Optimizer scoring layer: run_eval_suite(params, split)
+│   │                                    # Fast-path gating: deterministic suites first, LLM judges gated
+│   │                                    # Writes/cleans optimizer/scratch/config_override.json
+│   ├── Dockerfile                       # Eval harness container (HTTP mode for optimizer)
 │   │
 │   ├── datasets/                        # All test data (human-labeled or reviewed)
 │   │   ├── intent/
 │   │   │   ├── golden.jsonl             # {query, expected_intent, notes}
 │   │   │   └── edge_cases.jsonl         # Ambiguous and boundary cases
+│   │   ├── oos_subclass/
+│   │   │   └── golden.jsonl             # {message, expected_sub_class, expected_complexity, notes}
 │   │   ├── extraction/
 │   │   │   ├── golden.jsonl             # {query, expected_fields: {activity, env, ...}}
 │   │   │   └── edge_cases.jsonl
@@ -278,7 +309,8 @@ sales_agent/
 │       ├── test_extraction.py
 │       ├── test_retrieval.py
 │       ├── test_synthesis.py
-│       └── test_multiturn.py
+│       ├── test_multiturn.py
+│       └── test_oos_subclass.py         # OOS sub-class accuracy (≥0.90), inappropriate recall hard gate (1.0), complexity accuracy (≥0.85)
 │
 ├── scripts/
 │   ├── ingest_catalog.py                # Normalizes Amazon JSONL + REI overrides → products.jsonl
@@ -287,12 +319,47 @@ sales_agent/
 │   │                                    # --rebuild drops + recreates collection (required on model swap)
 │   ├── generate_dataset.py              # Synthetically generates test queries from seed taxonomy
 │   ├── label_retrieval.py               # Interactive CLI tool for labeling product relevance
-│   └── run_evals.sh                     # Wrapper script for CI — sets env, runs pytest, exports report
+│   ├── run_evals.sh                     # Wrapper script for CI — sets env, runs pytest, exports report
+│   ├── analyze_feedback.py              # Aggregation report: thumbs rate by intent/role/activity/stage
+│   └── promote_feedback.py              # Interactive CLI: promote thumbs-down events → evals/datasets/
 │
 ├── .github/
 │   └── workflows/
 │       └── evals.yml                    # CI: runs safety gate on every PR, full suite on merge
 │
+├── optimizer/                           # Stage 3: autonomous optimizer (see optimizer.md)
+│   ├── __init__.py
+│   ├── __main__.py                      # python -m optimizer run|select|promote|commit
+│   ├── config.yml                       # application-specific optimizer config
+│   ├── config.py                        # load() + validate() — single point for config access
+│   ├── parameter_catalog.json           # 22-parameter catalog: Class A/B/C/D with ranges + risk
+│   ├── harness.py                       # interface to eval suite: EvalResult + run_eval_suite()
+│   ├── trial_runner.py                  # single trial executor: apply params → eval → floors → log
+│   ├── splits.py                        # hash-based deterministic dev/val/test assignment
+│   ├── baseline.py                      # capture + load baseline eval scores
+│   ├── tracking.py                      # MLflow integration: log_trial, get_experiment_runs
+│   ├── sampler.py                       # Optuna NSGA-II numeric phase (Class B + C)
+│   ├── proposer.py                      # DSPy MIPROv2 prompt phase (Class A)
+│   ├── validator.py                     # floor checks + overfit detection
+│   ├── guard.py                         # generalization guard: dev/val correlation every N trials
+│   ├── pareto.py                        # Pareto frontier: update, load, save
+│   ├── select.py                        # test-split gate + candidate selection
+│   ├── select_ui.py                     # Rich terminal table: frontier comparison vs baseline
+│   ├── commit.py                        # apply param changes to pipeline files + git commit
+│   ├── dspy_modules.py                  # DSPy Signature + Module wrappers for pipeline stages
+│   ├── Dockerfile                       # optimizer container (python -m optimizer)
+│   ├── scratch/                         # temp config_override.json per trial (gitignored)
+│   └── reports/                         # pareto_frontier.json + MLflow artifacts (gitignored)
+│
+├── feedback/                            # Internal tester feedback UI + storage (not deployed to customers)
+│   ├── __init__.py
+│   ├── store.py                         # PostgreSQL read/write for feedback_events + feedback_product_ratings
+│   │                                    # Uses FEEDBACK_POSTGRES_DSN — separate DB from production
+│   ├── app.py                           # Streamlit chat UI: onboarding → chat → per-turn thumbs + annotation
+│   └── Dockerfile                       # feedback UI container (streamlit run feedback/app.py)
+│
+├── docker-compose.yml                   # profiles: optimizer (optimizer+harness+mlflow+ollama), feedback (ui+db)
+├── requirements-optimizer.txt           # optimizer-only deps: optuna, mlflow, dspy-ai, scipy
 ├── pyproject.toml
 └── requirements.txt
 ```
@@ -393,9 +460,10 @@ Thresholds are defined in `evals/config.py` as named constants so they are easy 
 
 Build the eval framework in this order — each step unblocks the next and gives signal fast:
 
-> **Pipeline status (as of 2026-03-17):**
+> **Pipeline status (as of 2026-03-18):**
 > ✅ `pipeline/state.py` — AgentState, ExtractedContext, initial_state()
-> ✅ `pipeline/intent.py` — Node 1: classify_and_extract (intent + context extraction)
+> ✅ `pipeline/intent.py` — Node 1: classify_and_extract (intent + context extraction + OOS sub-classification)
+> ✅ OOS sub-classification eval complete: evals/datasets/oos_subclass/golden.jsonl (32 examples: 10 social, 16 benign, 6 inappropriate) + evals/tests/test_oos_subclass.py (5 tests: overall accuracy ≥ 0.90, inappropriate recall = 1.0 hard gate, social not misrouted, complexity accuracy ≥ 0.85); degradation.jsonl OOS scenarios updated for sub-class-appropriate assertions (deg003/004 benign check, deg012 social check, deg013 inappropriate hard-reject)
 > ✅ `pipeline/translator.py` — Node 3: translate_specs (ontology lookup + LLM fallback)
 > ✅ `pipeline/retriever.py` — Node 4: hybrid RRF search + spec re-ranking
 > ✅ `pipeline/synthesizer.py` — Node 5: persona response + safety disclaimer injection
@@ -423,6 +491,22 @@ Build the eval framework in this order — each step unblocks the next and gives
 
 5. **Synthesis eval (relevance + persona + groundedness)** — `evals/judges/` infrastructure (base.py, prompts.py, 4 rubrics) + `evals/metrics/` (relevance.py, persona.py, faithfulness.py) + `evals/tests/test_synthesis.py` (5 tests) + `evals/datasets/synthesis/golden.jsonl` (14 scenarios). Config: `evals/config.py`. Runner: `scripts/run_evals.sh`. No Qdrant needed — products stored in dataset.
 
-6. **Multi-turn + degradation eval** — `evals/metrics/multiturn.py` (6 deterministic functions: single_followup_check, repeated_question_check, context_fields_present, oos_deflection_check, zero_result_check, contradictory_flag) + `evals/judges/rubrics/coherence.md` + `build_coherence_prompt()` in prompts.py + `evals/tests/test_multiturn.py` (10 tests). Datasets: `evals/datasets/multiturn/conversations.jsonl` (8 conversations) + `degradation.jsonl` (11 scenarios). Infrastructure: session-scoped `embedding_provider` + `eval_graph` in conftest.py; `requires_qdrant` marker for Qdrant-dependent tests. Zero-result tests call `synthesize()` directly — no Qdrant needed. Coherence judge scores full conversation transcript (1–5), threshold ≥ 3.5.
+6. **Multi-turn + degradation eval** — `evals/metrics/multiturn.py` (9 deterministic functions: single_followup_check, repeated_question_check, context_fields_present, oos_deflection_check, oos_inappropriate_check, oos_social_check, oos_benign_check, zero_result_check, contradictory_flag) + `evals/judges/rubrics/coherence.md` + `build_coherence_prompt()` in prompts.py + `evals/tests/test_multiturn.py` (10 tests). Datasets: `evals/datasets/multiturn/conversations.jsonl` (8 conversations) + `degradation.jsonl` (13 scenarios — includes deg012 social and deg013 inappropriate hard-reject). Infrastructure: session-scoped `embedding_provider` + `eval_graph` in conftest.py; `requires_qdrant` marker for Qdrant-dependent tests. Zero-result tests call `synthesize()` directly — no Qdrant needed. Coherence judge scores full conversation transcript (1–5), threshold ≥ 3.5.
 
 7. **CI wiring** — `.github/workflows/evals.yml`: two jobs — `safety-gate` (every PR, ~10 min, no Qdrant) and `full-suite` (push to master only, ~60 min, Qdrant Cloud via secrets). Ollama + models installed in runner. Reports archived as GitHub Actions artifacts. Secrets required: `QDRANT_URL`, `QDRANT_API_KEY`.
+
+**Stage 3 — Autonomous Optimizer** (see `optimizer.md` for full specification)
+
+The optimizer is the third major stage of the solution — it consumes the eval framework as
+its scoring signal and iterates over the parameter space to find Pareto-optimal configurations
+for human review. It is built in three phases:
+
+- **Phase 1 (Numeric)** — Optuna over Class B + C parameters (temperatures, retrieval_k, hybrid_alpha). Lowest risk, first to build.
+- **Phase 2 (Prompt)** — DSPy MIPROv2 over Class A parameters (prompts, few-shot examples). Highest leverage.
+- **Phase 3 (Data)** — LLM-assisted Class D edits (ontology, safety flags). Additive-only, human review on every change.
+
+Step-by-step implementation plan: `optimizer_plan.md` (24 steps, Foundation + 3 phases).
+
+Key design properties: dev/val/test dataset split prevents overfitting; Pareto frontier
+instead of a single winner; hard floors on all gated metrics; generalization guard monitors
+dev/val score correlation; human selects from frontier and approves before merge.

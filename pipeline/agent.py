@@ -43,6 +43,7 @@ from pipeline.embeddings import default_provider as default_embedding_provider
 from pipeline.graph import build_graph
 from pipeline.llm import default_provider as default_llm_provider
 from pipeline.state import AgentState, initial_state
+from pipeline.tracing import new_trace, reset_trace, set_trace, tracer
 
 # ---------------------------------------------------------------------------
 # Singleton graph — initialised once
@@ -117,9 +118,16 @@ def invoke(session_id: str, user_message: str) -> str:
         # The messages reducer in AgentState appends rather than replaces
         input_data = {"messages": [{"role": "user", "content": user_message}]}
 
-    result = graph.invoke(input_data, config=config)
-
-    return result.get("response") or ""
+    trace = new_trace(session_id=session_id, user_message=user_message)
+    token = set_trace(trace)
+    try:
+        result = graph.invoke(input_data, config=config)
+        response = result.get("response") or ""
+        trace.update(output=response)
+        return response
+    finally:
+        reset_trace(token)
+        tracer().flush()
 
 
 def get_session_state(session_id: str) -> Optional[AgentState]:

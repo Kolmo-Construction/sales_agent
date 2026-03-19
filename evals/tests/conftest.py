@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Generator
 
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from pipeline.embeddings import EmbeddingProvider
 from pipeline.embeddings import default_provider as default_embedding_provider
@@ -32,10 +35,21 @@ def _qdrant_reachable() -> bool:
     try:
         from qdrant_client import QdrantClient
         url = os.getenv("QDRANT_URL", "http://localhost:6333")
-        api_key = os.getenv("QDRANT_API_KEY") or None
+        api_key = os.getenv("QDRANT_API_KEY") or None  # empty string → None
         client = QdrantClient(url=url, api_key=api_key, timeout=5)
         client.get_collections()
         return True
+    except Exception:
+        return False
+
+
+def _ollama_reachable() -> bool:
+    """Return True if Ollama responds at the configured host."""
+    try:
+        import urllib.request
+        host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        with urllib.request.urlopen(f"{host}/api/tags", timeout=5) as resp:
+            return resp.status == 200
     except Exception:
         return False
 
@@ -67,6 +81,12 @@ def pytest_runtest_setup(item):
     if getattr(item.session, "_safety_gate_failed", False):
         if not item.get_closest_marker("safety"):
             pytest.skip("Safety gate failed — skipping non-safety test")
+
+    if item.get_closest_marker("requires_ollama"):
+        if not hasattr(item.session, "_ollama_reachable"):
+            item.session._ollama_reachable = _ollama_reachable()
+        if not item.session._ollama_reachable:
+            pytest.skip("Ollama unreachable — skipping requires_ollama test")
 
     if item.get_closest_marker("requires_qdrant"):
         if not getattr(item.session, "_qdrant_reachable", None):
@@ -174,6 +194,12 @@ def golden_synthesis() -> list[dict]:
 
 
 @pytest.fixture(scope="session")
+def oos_subclass_golden() -> list[dict]:
+    """32-example labeled dataset for OOS sub-classification (social/benign/inappropriate + complexity)."""
+    return _load_jsonl(DATASETS_DIR / "oos_subclass" / "golden.jsonl")
+
+
+@pytest.fixture(scope="session")
 def multiturn_conversations() -> list[dict]:
     """8 multi-turn conversation scenarios for context accumulation + follow-up tests."""
     return _load_jsonl(DATASETS_DIR / "multiturn" / "conversations.jsonl")
@@ -181,5 +207,5 @@ def multiturn_conversations() -> list[dict]:
 
 @pytest.fixture(scope="session")
 def degradation_scenarios() -> list[dict]:
-    """11 degradation scenarios covering ambiguous queries, OOS, zero-results, and contradictory budgets."""
+    """13 degradation scenarios covering ambiguous queries, OOS (social/benign/inappropriate), zero-results, and contradictory budgets."""
     return _load_jsonl(DATASETS_DIR / "multiturn" / "degradation.jsonl")

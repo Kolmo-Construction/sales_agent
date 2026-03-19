@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.requires_ollama
+
 from evals.judges.base import JudgeResult
 from evals.metrics.safety import (
     RuleCheckResult,
@@ -29,8 +31,9 @@ from evals.metrics.safety import (
     check_all,
     load_safety_flags,
 )
-from pipeline.intent import extract_context
+from pipeline.intent import classify_and_extract
 from pipeline.llm import LLMProvider
+from pipeline.state import initial_state
 from pipeline.synthesizer import synthesize
 
 
@@ -40,36 +43,40 @@ from pipeline.synthesizer import synthesize
 
 def _run_scenario(scenario: dict, provider: LLMProvider) -> dict:
     """
-    Run a single safety scenario through extract_context → synthesize.
+    Run a single safety scenario through the real production path:
+      classify_and_extract() → synthesize()
+
+    This is the same flow the LangGraph runs in production. Intent classification
+    is NOT hardcoded — the LLM decides whether the query is product_search,
+    general_education, etc. The safety block must fire regardless of intent.
+
+    Retrieval (Qdrant) is skipped — products=[] is sufficient to verify that
+    safety disclaimers are injected and reproduced by the LLM.
 
     Returns a dict with the fields check_all() expects:
       {activity, response, disclaimers_applied}
     """
     query = scenario["query"]
-    messages = [{"role": "user", "content": query}]
+    state = initial_state(scenario["scenario_id"], query)
 
-    # extract_context returns ExtractedContext; activity may be inferred or None.
-    context = extract_context(messages, provider)
+    # Step 1: real intent classification + context extraction
+    updates = classify_and_extract(state, provider)
+    state.update(updates)
 
-    state = {
-        "session_id": scenario["scenario_id"],
-        "messages": messages,
-        "intent": "product_search",
-        "extracted_context": context,
-        "translated_specs": None,
-        "retrieved_products": [],
-        "response": None,
-        "disclaimers_applied": [],
-    }
+    # Step 2: no retrieval — safety must not depend on products being present
+    state["retrieved_products"] = []
 
+    # Step 3: synthesize with real intent + context
     result = synthesize(state, provider)
 
+    context = state.get("extracted_context")
     return {
         "activity": scenario["expected_disclaimer_key"],
         "response": result["response"],
         "disclaimers_applied": result["disclaimers_applied"],
         "_scenario": scenario,
         "_context_activity": context.activity if context else None,
+        "_intent": state.get("intent"),
     }
 
 
@@ -235,13 +242,14 @@ def test_per_scenario_summary(safety_results, capsys):
     raw, checks = safety_results
 
     print("\n\n=== Safety Eval — Scenario Results ===")
-    print(f"{'ID':<8} {'Activity':<30} {'Risk':<10} {'Flag':<6} {'Text':<6} {'Gear':<6} {'Pass'}")
-    print("-" * 82)
+    print(f"{'ID':<8} {'Activity':<30} {'Risk':<10} {'Intent':<18} {'Flag':<6} {'Text':<6} {'Gear':<6} {'Pass'}")
+    print("-" * 100)
 
     for r, c in zip(raw, checks):
         sid = r["_scenario"]["scenario_id"]
+        intent = r.get("_intent") or "?"
         print(
-            f"{sid:<8} {c.activity:<30} {c.risk_level:<10} "
+            f"{sid:<8} {c.activity:<30} {c.risk_level:<10} {intent:<18} "
             f"{'OK' if c.disclaimer_flagged else 'FAIL':<6} "
             f"{'OK' if c.disclaimer_text_present else 'FAIL':<6} "
             f"{'OK' if c.gear_present else 'FAIL':<6} "
