@@ -9,10 +9,18 @@
 #   bash scripts/run_evals.sh synthesis    # synthesis LLM judge suite
 #   bash scripts/run_evals.sh oos_subclass # OOS sub-classification suite
 #   bash scripts/run_evals.sh multiturn    # multi-turn + degradation suite
+#
+# Output:
+#   evals/reports/report.json   — per-test durations + outcomes (pytest-json-report)
+#   optimizer/reports/mlflow.db — MLflow experiment 'evals/{suite}' (trends over time)
+#   Run: mlflow ui --backend-store-uri sqlite:///optimizer/reports/mlflow.db
 
 set -euo pipefail
 
 SUITE="${1:-all}"
+REPORT_DIR="evals/reports"
+REPORT_FILE="${REPORT_DIR}/report.json"
+mkdir -p "$REPORT_DIR"
 
 # Activate virtualenv if present
 if [ -f ".venv/Scripts/activate" ]; then
@@ -22,6 +30,9 @@ elif [ -f ".venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     source ".venv/bin/activate"
 fi
+
+# Common pytest flags
+JSON_OPTS="--json-report --json-report-file=${REPORT_FILE} --durations=0"
 
 case "$SUITE" in
     all)
@@ -33,35 +44,35 @@ case "$SUITE" in
                evals/tests/test_retrieval.py \
                evals/tests/test_synthesis.py \
                evals/tests/test_multiturn.py \
-               -v -s
+               -v -s $JSON_OPTS
         ;;
     safety)
         echo "=== Running safety gate only ==="
-        pytest evals/tests/test_safety.py -m safety -v -s
+        pytest evals/tests/test_safety.py -m safety -v -s $JSON_OPTS
         ;;
     intent)
         echo "=== Running intent classification eval ==="
-        pytest evals/tests/test_safety.py evals/tests/test_intent.py -v -s
+        pytest evals/tests/test_safety.py evals/tests/test_intent.py -v -s $JSON_OPTS
         ;;
     extraction)
         echo "=== Running context extraction eval ==="
-        pytest evals/tests/test_safety.py evals/tests/test_extraction.py -v -s
+        pytest evals/tests/test_safety.py evals/tests/test_extraction.py -v -s $JSON_OPTS
         ;;
     retrieval)
         echo "=== Running retrieval eval (requires labeled data — run label_retrieval.py first) ==="
-        pytest evals/tests/test_safety.py evals/tests/test_retrieval.py -v -s
+        pytest evals/tests/test_safety.py evals/tests/test_retrieval.py -v -s $JSON_OPTS
         ;;
     synthesis)
         echo "=== Running synthesis eval (LLM judge — requires Ollama + gemma2:9b) ==="
-        pytest evals/tests/test_safety.py evals/tests/test_synthesis.py -v -s
+        pytest evals/tests/test_safety.py evals/tests/test_synthesis.py -v -s $JSON_OPTS
         ;;
     oos_subclass)
         echo "=== Running OOS sub-classification eval (requires Ollama + llama3.2) ==="
-        pytest evals/tests/test_safety.py evals/tests/test_oos_subclass.py -v -s
+        pytest evals/tests/test_safety.py evals/tests/test_oos_subclass.py -v -s $JSON_OPTS
         ;;
     multiturn)
         echo "=== Running multi-turn + degradation eval (requires Ollama; Qdrant for requires_qdrant tests) ==="
-        pytest evals/tests/test_safety.py evals/tests/test_multiturn.py -v -s
+        pytest evals/tests/test_safety.py evals/tests/test_multiturn.py -v -s $JSON_OPTS
         ;;
     *)
         echo "Unknown suite: $SUITE"
@@ -69,3 +80,6 @@ case "$SUITE" in
         exit 1
         ;;
 esac
+
+# Log results to MLflow (evals/{suite} experiment — trends over time)
+python scripts/log_evals_to_mlflow.py "$SUITE" || echo "[log_evals] MLflow logging failed (non-fatal)"

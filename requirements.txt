@@ -23,6 +23,7 @@ deepeval>=1.0.0                      # test harness, LLM-as-judge, CI gates
 ragas>=0.1.0                         # RAG-specific metrics (faithfulness, context precision)
 scikit-learn>=1.3                    # classification + retrieval metrics
 langfuse>=2.0.0                      # pipeline tracing per stage (self-hosted or cloud)
+pytest-json-report>=1.5.0            # per-test JSON output with durations (feeds MLflow)
 
 # Feedback UI
 streamlit>=1.35.0                    # internal tester chat interface (feedback/app.py)
