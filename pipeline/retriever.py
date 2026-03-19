@@ -363,8 +363,8 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
         products = search(
             query_specs=query_specs,
             embedding_provider=embedding_provider,
-            k=RETRIEVAL_K,
-            alpha=HYBRID_ALPHA,
+            k=_k,
+            alpha=_alpha,
             apply_filters=True,
         )
 
@@ -374,8 +374,8 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
             products = search(
                 query_specs=query_specs,
                 embedding_provider=embedding_provider,
-                k=RETRIEVAL_K,
-                alpha=HYBRID_ALPHA,
+                k=_k,
+                alpha=_alpha,
                 apply_filters=False,
             )
 
@@ -387,7 +387,7 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
             top = products[0]
             logger.info(
                 "[retriever] hits=%d  top=%r (score=n/a)  (%.3fs)",
-                len(products), top.title[:60], elapsed,
+                len(products), top.name[:60], elapsed,
             )
         else:
             logger.warning("[retriever] zero results after fallback retry  (%.3fs)", elapsed)
