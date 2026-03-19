@@ -507,6 +507,66 @@ docker-compose exec optimizer python -m optimizer commit \
 - MLflow tracks all experiments — browse history at `http://localhost:5000`
 - Budget cap: 50 experiments per run by default (configurable in `optimizer/config.yml`)
 
+### Why optimizer runs are slow
+
+Each trial runs the full eval suite **twice** (dev split + val split). One pass through
+`evals/scorer.py` makes dozens of serial Ollama calls — classification and extraction
+for every example in the split, then synthesizer + four LLM judge calls if Phase 1 passes.
+All calls are sequential and each blocks on the local GPU.
+
+With 50 trials and a `gemma2:9b` model on a single consumer GPU, a full numeric run takes
+roughly 3–6 hours. The fast-path gate in `scorer.py` helps: trials that fail Phase 1
+floors (intent_f1, ndcg_at_5, etc.) are rejected before any synthesis or judge calls run,
+so the majority of trials (~80%) never pay the expensive Phase 2 cost.
+
+### How to make optimizer runs faster
+
+**1. Run only what you need to tune (biggest win)**
+
+The numeric phase only needs retrieval and classification scores. If you are tuning
+`retrieval_k` or `hybrid_alpha`, the LLM judge calls in Phase 2 add no information —
+they are only needed for prompt or temperature changes. Set tight Phase 1 floors in
+`optimizer/config.yml` so trials are pruned early and Phase 2 rarely runs.
+
+**2. Use a faster local model for Phase 1**
+
+`llama3.2:latest` is already used for classification tasks. Make sure `LLM_FAST_MODEL`
+is set in `.env` and that the intent/extraction scorers are routing to the fast model,
+not `gemma2:9b`. Check `pipeline/intent.py` — classification calls should use
+`llm.fast_model` if the provider exposes it.
+
+**3. Run fewer trials**
+
+`--n-trials 50` is the default. For a first numeric sweep, 20 trials is often enough
+to find the retrieval sweet spot. Use 50+ only when you need the Pareto frontier to
+stabilise.
+
+```bash
+docker-compose exec optimizer python -m optimizer run --phase numeric --n-trials 20
+```
+
+**4. Reduce the eval dataset size (dev split only)**
+
+The dev split is 70% of each dataset. If the golden datasets are large, trim them. The
+optimizer only needs enough examples to produce stable metric estimates — 30–40 examples
+per suite is sufficient for the numeric phase. Keep the full dataset for final test-gate
+promotion.
+
+**5. Parallelise eval calls (code change required)**
+
+The current `scorer.py` runs all example calls serially. The classification and
+extraction examples are fully independent — they could run concurrently using
+`asyncio` + Ollama's async API or a `ThreadPoolExecutor`. The four Phase 2 judge types
+(safety, relevance, persona, coherence) are also independent of each other and could
+run in parallel. This is the highest-leverage code change for reducing trial time without
+changing models or dataset size.
+
+**Note on cloud models:** Switching to a cloud LLM (e.g. DeepSeek) would allow parallel
+requests and faster per-token latency, significantly reducing trial time. However, this
+project uses `LLM_PROVIDER=ollama` only — the pipeline relies on grammar-constrained
+structured output (CFG/GBNF) for `complete_structured()`, which requires local Ollama
+and is not available from cloud APIs.
+
 ---
 
 ## 7. Observability — Langfuse
