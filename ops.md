@@ -240,13 +240,25 @@ bash scripts/run_evals.sh retrieval     # retrieval NDCG/MRR (25 seed queries �
 bash scripts/run_evals.sh synthesis     # synthesis LLM judge (14 golden scenarios)
 bash scripts/run_evals.sh multiturn     # multi-turn coherence + degradation (8 convs + 13 scenarios)
 
-# Or invoke pytest directly
-pytest evals/tests/test_safety.py -m safety -v -s
-pytest evals/tests/test_synthesis.py -v -s
+# Or invoke pytest directly (PowerShell / any terminal — no bash needed)
+pytest evals/tests/test_safety.py -m safety -v -s   # safety-marked tests only
+pytest evals/tests/ -v -s --durations=0              # all suites, print slowest tests at end
 
 # Optimizer smoke tests — run without any infrastructure (fully mocked)
 python -m pytest optimizer/tests/test_smoke.py -v
 ```
+
+**Eval output — where to check results:**
+
+| Output | Location | How to view |
+|---|---|---|
+| Terminal | stdout | Slowest tests printed at end (`--durations=0`) |
+| JSON report | `evals/reports/report.json` | Per-test duration + outcome, overwritten each run |
+| MLflow trends | `optimizer/reports/mlflow.db` | `mlflow ui --backend-store-uri sqlite:///optimizer/reports/mlflow.db` → `http://localhost:5000` → experiment `evals/{suite}` |
+| CI artifacts | GitHub Actions | Actions tab → workflow run → Artifacts → `safety-report-{sha}` or `full-eval-report-{sha}` |
+
+`evals/reports/report.json` is gitignored — it is a local runtime artifact.
+History is preserved in MLflow across runs.
 
 **Infrastructure skip behaviour:**
 All eval tests that call the LLM are marked `requires_ollama`. All tests that call Qdrant
