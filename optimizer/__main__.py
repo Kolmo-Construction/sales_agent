@@ -15,8 +15,16 @@ Unimplemented commands print "not yet implemented" and exit cleanly.
 
 from __future__ import annotations
 
+import logging
 import typer
 from rich.console import Console
+from rich.logging import RichHandler
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    handlers=[RichHandler(show_time=True, show_path=False, markup=False)],
+)
 
 app     = typer.Typer(help="REI sales agent autonomous optimizer.")
 console = Console()

@@ -52,9 +52,15 @@ wired in Foundation Step 7.
 from __future__ import annotations
 
 import json
+import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+# Number of concurrent Ollama calls within a suite and across suites.
+# Keep at 4 — Ollama queues excess requests; too many workers just adds overhead.
+SCORER_WORKERS = 4
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -129,18 +135,38 @@ def _run_all_suites(
     trial_id: str,
     t0: float,
 ) -> dict[str, float]:
+    import logging
     from optimizer.config import load as load_optimizer_cfg
+
+    log = logging.getLogger(__name__)
+
+    def _log(suite: str, result: dict[str, float], t_suite: float) -> None:
+        scores_str = "  ".join(f"{k}={v:.3f}" for k, v in sorted(result.items()))
+        log.info("[scorer] %-20s %s  (%.1fs)", suite, scores_str, time.monotonic() - t_suite)
 
     llm        = _get_llm_provider()
     embed      = _get_embedding_provider()
     floors     = load_optimizer_cfg()["floors"]
     scores: dict[str, float] = {}
 
-    # ── Phase 1: deterministic suites ─────────────────────────────────────────
-    scores.update(_score_intent(llm, split))
-    scores.update(_score_extraction(llm, split))
-    scores.update(_score_oos_subclass(llm, split))
-    scores.update(_score_retrieval(embed, split))
+    log.info("[scorer] starting  trial=%s  split=%s  workers=%d",
+             trial_id or "baseline", split, SCORER_WORKERS)
+
+    # ── Phase 1: run all four suites concurrently ──────────────────────────────
+    phase1_tasks = {
+        "intent":      lambda: _score_intent(llm, split),
+        "extraction":  lambda: _score_extraction(llm, split),
+        "oos_subclass":lambda: _score_oos_subclass(llm, split),
+        "retrieval":   lambda: _score_retrieval(embed, split),
+    }
+    with ThreadPoolExecutor(max_workers=SCORER_WORKERS) as ex:
+        t_suite = {name: time.monotonic() for name in phase1_tasks}
+        futures = {ex.submit(fn): name for name, fn in phase1_tasks.items()}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            r = fut.result()
+            scores.update(r)
+            _log(name, r, t_suite[name])
 
     # Fast-path floor check — skip synthesis if any deterministic metric fails
     det_violations = [
@@ -148,15 +174,26 @@ def _run_all_suites(
         if scores.get(k, 0.0) < floors.get(k, 0.0)
     ]
     if det_violations:
-        # Partial scores returned — harness.run_eval_suite() will build EvalResult
-        # with passed_floors=False so trial_runner knows to skip Phase 2
+        log.info("[scorer] PRUNED (phase1 floor violations: %s)  elapsed=%.1fs",
+                 det_violations, time.monotonic() - t0)
         return scores
 
-    # ── Phase 2: synthesis + judge suites ─────────────────────────────────────
-    scores.update(_score_safety(llm, split))
-    scores.update(_score_synthesis(llm, split))
-    scores.update(_score_coherence(llm, embed, split))
+    # ── Phase 2: run synthesis suites concurrently ────────────────────────────
+    phase2_tasks = {
+        "safety":    lambda: _score_safety(llm, split),
+        "synthesis": lambda: _score_synthesis(llm, split),
+        "coherence": lambda: _score_coherence(llm, embed, split),
+    }
+    with ThreadPoolExecutor(max_workers=SCORER_WORKERS) as ex:
+        t_suite = {name: time.monotonic() for name in phase2_tasks}
+        futures = {ex.submit(fn): name for name, fn in phase2_tasks.items()}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            r = fut.result()
+            scores.update(r)
+            _log(name, r, t_suite[name])
 
+    log.info("[scorer] done  elapsed=%.1fs", time.monotonic() - t0)
     return scores
 
 
@@ -177,13 +214,23 @@ def _score_intent(llm, split: str) -> dict[str, float]:
     if not examples:
         return {"intent_f1": 0.0}
 
-    y_true, y_pred = [], []
-    for ex in examples:
+    log = logging.getLogger(__name__)
+    n = len(examples)
+
+    def _run(idx_ex):
+        idx, ex = idx_ex
         messages = [{"role": "user", "content": ex["query"]}]
         predicted = classify_intent(messages, llm)
-        y_true.append(ex["expected_intent"])
-        y_pred.append(predicted)
+        log.info("[intent] %d/%d  expected=%s  got=%s", idx + 1, n, ex["expected_intent"], predicted)
+        return idx, ex["expected_intent"], predicted
 
+    results = [None] * n
+    with ThreadPoolExecutor(max_workers=SCORER_WORKERS) as ex:
+        for idx, true, pred in ex.map(_run, enumerate(examples)):
+            results[idx] = (true, pred)
+
+    y_true = [r[0] for r in results]
+    y_pred = [r[1] for r in results]
     return {"intent_f1": macro_f1(y_true, y_pred)}
 
 
@@ -207,13 +254,23 @@ def _score_extraction(llm, split: str) -> dict[str, float]:
     if not examples:
         return {"extraction_macro_f1": 0.0}
 
-    preds, truths = [], []
-    for ex in examples:
+    log = logging.getLogger(__name__)
+    n = len(examples)
+
+    def _run(idx_ex):
+        idx, ex = idx_ex
         messages = [{"role": "user", "content": ex["query"]}]
         ctx = extract_context(messages, llm)
-        preds.append(ctx.model_dump() if hasattr(ctx, "model_dump") else dict(ctx))
-        truths.append(ex.get("expected_context", {}))
+        log.info("[extraction] %d/%d", idx + 1, n)
+        return idx, (ctx.model_dump() if hasattr(ctx, "model_dump") else dict(ctx)), ex.get("expected_context", {})
 
+    results = [None] * n
+    with ThreadPoolExecutor(max_workers=SCORER_WORKERS) as ex:
+        for idx, pred, truth in ex.map(_run, enumerate(examples)):
+            results[idx] = (pred, truth)
+
+    preds  = [r[0] for r in results]
+    truths = [r[1] for r in results]
     per_field = field_precision_recall(preds, truths)
     f1 = (macro_precision(per_field) + macro_recall(per_field)) / 2.0
     return {"extraction_macro_f1": f1}
@@ -235,12 +292,23 @@ def _score_oos_subclass(llm, split: str) -> dict[str, float]:
     if not examples:
         return {"oos_subclass_accuracy": 0.0, "inappropriate_recall": 0.0}
 
-    y_true_sub, y_pred_sub = [], []
-    for ex in examples:
+    log = logging.getLogger(__name__)
+    n = len(examples)
+
+    def _run(idx_ex):
+        idx, ex = idx_ex
         messages = [{"role": "user", "content": ex["message"]}]
         result = classify_oos_subtype(messages, llm)
-        y_true_sub.append(ex["expected_sub_class"])
-        y_pred_sub.append(result.sub_class)
+        log.info("[oos_subclass] %d/%d  expected=%s  got=%s", idx + 1, n, ex["expected_sub_class"], result.sub_class)
+        return idx, ex["expected_sub_class"], result.sub_class
+
+    rows = [None] * n
+    with ThreadPoolExecutor(max_workers=SCORER_WORKERS) as ex:
+        for idx, true, pred in ex.map(_run, enumerate(examples)):
+            rows[idx] = (true, pred)
+
+    y_true_sub = [r[0] for r in rows]
+    y_pred_sub = [r[1] for r in rows]
 
     accuracy = sum(
         1 for t, p in zip(y_true_sub, y_pred_sub) if t == p
