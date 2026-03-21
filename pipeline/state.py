@@ -14,7 +14,7 @@ state fields — all shared data lives here.
   check_completeness    →  (reads extracted_context, routes — no writes)
   ask_followup          →  messages (appends assistant follow-up)
   translate_specs       →  translated_specs
-  retrieve              →  retrieved_products
+  retrieve              →  retrieved_products, retrieval_confidence
   synthesize            →  response, disclaimers_applied, messages (appends final response)
 """
 
@@ -176,6 +176,13 @@ class AgentState(TypedDict):
     # Output of Node 4. Candidates from Qdrant hybrid search.
     # None until retrieve runs.
 
+    retrieval_confidence: Optional[str]
+    # Output of Node 4. Match quality of the top retrieval result.
+    # "exact" — top RRF score ≥ CONFIDENCE_HIGH_THRESHOLD (good catalog match)
+    # "close" — top RRF score between LOW and HIGH threshold (partial match)
+    # "none"  — no results or score below CONFIDENCE_LOW_THRESHOLD
+    # None until retrieve runs.
+
     oos_sub_class: Optional[str]
     # Output of Node 1 (when intent == "out_of_scope").
     # Controlled vocabulary: "social" | "benign" | "inappropriate"
@@ -219,6 +226,7 @@ def initial_state(session_id: str, user_message: str) -> AgentState:
         oos_complexity=None,
         translated_specs=None,
         retrieved_products=None,
+        retrieval_confidence=None,
         response=None,
         disclaimers_applied=[],
     )

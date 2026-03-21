@@ -51,8 +51,9 @@ AgentState:
   oos_sub_class      str | None             # social | benign | inappropriate (OOS turns only)
   oos_complexity     str | None             # simple | complex (benign OOS only; drives model selection)
   translated_specs   ProductSpecs | None
-  retrieved_products list[Product] | None
-  response           str | None
+  retrieved_products    list[Product] | None
+  retrieval_confidence  str | None             # exact | close | none (set by retriever)
+  response              str | None
   disclaimers_applied list[str]
 ```
 
@@ -171,6 +172,7 @@ Scenario-based pass/fail tests:
 |---|---|
 | Ambiguous query (minimal context) | Asks exactly one focused follow-up, not multiple |
 | Retrieval returns zero results | Acknowledges the gap, does not hallucinate a product |
+| Retrieval returns low-confidence results | Tells customer we don't carry an exact match, presents closest alternatives |
 | Out-of-scope / social ("Hi") | Warm in-persona reply, not a deflection |
 | Out-of-scope / benign simple | Brief answer + natural redirect to gear |
 | Out-of-scope / benign complex | Short paragraph answer + redirect, heavier model |

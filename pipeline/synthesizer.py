@@ -3,9 +3,10 @@ Node 5: synthesize
 
 Generates the final customer-facing response.
 
-Handles five cases:
-  1. product_search + products found  → specific gear recommendation
-  2. product_search + no products     → honest acknowledgment, no hallucination
+Handles six cases:
+  1. product_search + exact match     → specific gear recommendation
+  2. product_search + close match     → "we don't carry X, but here's the closest"
+  3. product_search + no products     → honest acknowledgment, no hallucination
   3. general_education               → helpful gear/technique explanation
   4. support_request                 → hard-coded redirect to REI customer service
   5. out_of_scope                    → sub-class-aware handler (_synthesize_oos):
@@ -282,6 +283,7 @@ def _build_system_prompt(
     context: ExtractedContext | None,
     products: list[Product],
     safety_block: str,
+    confidence: str | None = None,
 ) -> str:
     parts = [_ov("synthesizer_system_prompt", SYSTEM_PROMPT)]
 
@@ -294,11 +296,19 @@ def _build_system_prompt(
     if intent == "product_search":
         parts.append("\n" + _format_products(products))
 
-        if not products:
+        if not products or confidence == "none":
             parts.append(
                 "\nNOTE: No products were found matching the customer's criteria. "
                 "Acknowledge this honestly. Do not invent or hallucinate products. "
                 "Suggest they visit an REI store or check REI.com directly."
+            )
+        elif confidence == "close":
+            parts.append(
+                "\nNOTE: The catalog does not contain an exact match for what the customer "
+                "described. The products above are the closest available options. "
+                "Be upfront: tell the customer we don't carry exactly what they asked for, "
+                "then present these as the nearest alternatives. Do not present them as "
+                "exact matches. Do not invent products outside this list."
             )
 
     return "\n".join(parts)
@@ -408,9 +418,10 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
     intent = state.get("intent")
     context: ExtractedContext | None = state.get("extracted_context")
     products: list[Product] = state.get("retrieved_products") or []
+    confidence: str | None = state.get("retrieval_confidence")
     messages: list[dict] = state.get("messages", [])
 
-    logger.info("[synthesizer] intent=%s  products=%d", intent, len(products))
+    logger.info("[synthesizer] intent=%s  products=%d  confidence=%s", intent, len(products), confidence)
 
     with stage_span("synthesize", intent=intent or ""):
 
@@ -455,11 +466,14 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
             disclaimers_applied.append(flag_key)
             logger.info("[synthesizer] safety_flag=%s  intent=%s", flag_key, intent)
 
-        if not products and intent == "product_search":
-            logger.warning("[synthesizer] zero products retrieved — will acknowledge gap")
+        if intent == "product_search":
+            if not products or confidence == "none":
+                logger.warning("[synthesizer] zero/no-confidence products — will acknowledge gap")
+            elif confidence == "close":
+                logger.info("[synthesizer] close match — framing as nearest alternative")
 
         # --- Build system prompt ---
-        system = _build_system_prompt(intent, context, products, safety_block)
+        system = _build_system_prompt(intent, context, products, safety_block, confidence)
 
         # --- Build message list for LLM ---
         # Pass full conversation history so multi-turn context is preserved.

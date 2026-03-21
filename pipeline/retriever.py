@@ -72,15 +72,39 @@ SCORE_THRESHOLD: float = 0.0
 # 0.0 disables spec re-ranking
 SPEC_RERANK_WEIGHT: float = 0.3
 
+# Retrieval confidence thresholds — classify match quality for synthesizer framing.
+# Scores are Qdrant RRF fusion values (typical range 0.008–0.033 with default settings).
+# ≥ HIGH  → "exact"  (good catalog match, recommend normally)
+# LOW–HIGH → "close"  (partial match, frame as "closest we carry")
+# < LOW   → "none"   (too poor to use — treat as no results)
+CONFIDENCE_HIGH_THRESHOLD: float = 0.020
+CONFIDENCE_LOW_THRESHOLD: float = 0.008
+
 # ---------------------------------------------------------------------------
 # Qdrant client factory
 # ---------------------------------------------------------------------------
 
 def _get_client():
     from qdrant_client import QdrantClient
-    url = os.getenv("QDRANT_URL", "http://localhost:6333")
+
+    url     = os.getenv("QDRANT_URL", "http://localhost:6333")
     api_key = os.getenv("QDRANT_API_KEY") or None
-    return QdrantClient(url=url, api_key=api_key)
+
+    # If a cloud URL is configured, try it first and fall back to local on failure.
+    # Cloud URL is anything that isn't localhost / 127.0.0.1.
+    is_cloud = url and not any(h in url for h in ("localhost", "127.0.0.1"))
+    if is_cloud:
+        try:
+            client = QdrantClient(url=url, api_key=api_key, timeout=10)
+            client.get_collections()   # lightweight probe
+            logger.info("[retriever] connected to cloud Qdrant: %s", url)
+            return client
+        except Exception as exc:
+            logger.warning("[retriever] cloud Qdrant unavailable (%s), falling back to local", exc)
+
+    local_url = "http://localhost:6333"
+    logger.info("[retriever] connecting to local Qdrant: %s", local_url)
+    return QdrantClient(url=local_url, api_key=None, timeout=10)
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +239,12 @@ def search(
     k: int | None = None,
     alpha: float | None = None,
     apply_filters: bool = True,
-) -> list[Product]:
+) -> tuple[list[Product], float]:
     """
-    Run hybrid search and return up to k Product objects.
+    Run hybrid search and return (products, top_score).
+
+    top_score is the Qdrant RRF fusion score of the first result (0.0 if no results).
+    The retrieve() node uses this to classify retrieval confidence.
 
     Parameters
     ----------
@@ -296,15 +323,18 @@ def search(
     )
 
     products = []
-    for point in results.points:
+    top_score: float = 0.0
+    for i, point in enumerate(results.points):
         try:
             product = Product.model_validate(point.payload)
             products.append(product)
+            if i == 0:
+                top_score = point.score or 0.0
         except Exception:
             # Malformed payload — skip silently
             continue
 
-    return products
+    return products, top_score
 
 
 def _rerank(products: list[Product], query_specs: ProductSpecs) -> list[Product]:
@@ -360,7 +390,7 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
         logger.info("[retriever] k=%d  alpha=%.2f  query=%r", _k, _alpha, search_query[:80])
 
         # Primary search with full filters
-        products = search(
+        products, top_score = search(
             query_specs=query_specs,
             embedding_provider=embedding_provider,
             k=_k,
@@ -371,7 +401,7 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
         # Fallback: retry without filters if nothing came back
         if not products:
             logger.info("[retriever] zero results with filters — retrying without filters")
-            products = search(
+            products, top_score = search(
                 query_specs=query_specs,
                 embedding_provider=embedding_provider,
                 k=_k,
@@ -382,14 +412,24 @@ def retrieve(state: AgentState, embedding_provider: EmbeddingProvider) -> dict:
         # Spec re-ranking
         products = _rerank(products, query_specs)
 
+        # Classify confidence from the top RRF score
+        _high = _ov("confidence_high_threshold", CONFIDENCE_HIGH_THRESHOLD)
+        _low  = _ov("confidence_low_threshold",  CONFIDENCE_LOW_THRESHOLD)
+        if not products or top_score < _low:
+            confidence = "none"
+        elif top_score >= _high:
+            confidence = "exact"
+        else:
+            confidence = "close"
+
         elapsed = time.perf_counter() - t0
         if products:
             top = products[0]
             logger.info(
-                "[retriever] hits=%d  top=%r (score=n/a)  (%.3fs)",
-                len(products), top.name[:60], elapsed,
+                "[retriever] hits=%d  top=%r  score=%.4f  confidence=%s  (%.3fs)",
+                len(products), top.name[:60], top_score, confidence, elapsed,
             )
         else:
             logger.warning("[retriever] zero results after fallback retry  (%.3fs)", elapsed)
 
-        return {"retrieved_products": products}
+        return {"retrieved_products": products, "retrieval_confidence": confidence}
