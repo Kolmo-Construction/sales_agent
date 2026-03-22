@@ -46,6 +46,13 @@ INTENT_TEMPERATURE: float = 0.0
 EXTRACT_TEMPERATURE: float = 0.0
 OOS_SUBCLASS_TEMPERATURE: float = 0.0
 
+# How many recent messages to pass to the intent classifier.
+# The classifier needs to know what the user wants NOW — passing the full session
+# history causes old high-priority intents (e.g. a support request from turn 1)
+# to bleed into later turns where the user has clearly moved on.
+# 6 = last 3 exchanges (user + assistant alternating). Optimizer-tunable.
+INTENT_CONTEXT_WINDOW: int = 6
+
 # ---------------------------------------------------------------------------
 # Intent classification
 # ---------------------------------------------------------------------------
@@ -226,14 +233,21 @@ class IntentResult(BaseModel):
 
 def classify_intent(messages: list[dict], provider: LLMProvider) -> IntentResult:
     """
-    Classify the customer's intent(s) from conversation history.
+    Classify the customer's intent(s) from recent conversation history.
 
-    Returns an IntentResult with primary_intent, secondary_intent, and support_is_active.
+    Only the last INTENT_CONTEXT_WINDOW messages are passed to the model.
+    This prevents old high-priority intents (e.g. a support request from turn 1)
+    from bleeding into later turns where the user has clearly moved on.
+
+    Returns an IntentResult with primary_intent, secondary_intent,
+    secondary_intent_type, and support_is_active.
     primary_intent drives graph routing; secondary_intent flows to the synthesizer.
     Uses the fast model — classification is a lightweight structured task.
     """
+    window = _ov("intent_context_window", INTENT_CONTEXT_WINDOW)
+    recent = messages[-window:] if len(messages) > window else messages
     conversation = "\n".join(
-        f"{m['role'].upper()}: {m['content']}" for m in messages
+        f"{m['role'].upper()}: {m['content']}" for m in recent
     )
 
     _examples = _ov("intent_few_shot_examples", INTENT_EXAMPLES)

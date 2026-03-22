@@ -21,6 +21,9 @@ evals/reports/*
 data/catalog/raw/
 data/catalog/products.jsonl
 
+# Chat session logs (generated, not committed)
+logs/
+
 # DB
 *.sqlite3
 

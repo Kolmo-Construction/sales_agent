@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 # Allow running from the repo root without installing the package
@@ -29,16 +30,34 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pipeline.agent import get_session_state, invoke
 
+# Logs are written to logs/chat_<session_id>.log, one file per run.
+_LOGS_DIR = Path(__file__).parent.parent / "logs"
 
-def _print_state_summary(session_id: str) -> None:
-    """Print a compact summary of the current session state for debugging."""
+
+def _open_log(session_id: str) -> object:
+    """Create (or append to) the log file for this session and return the file handle."""
+    _LOGS_DIR.mkdir(exist_ok=True)
+    log_path = _LOGS_DIR / f"chat_{session_id}.log"
+    handle = log_path.open("a", encoding="utf-8")
+    handle.write(f"\n{'─' * 60}\n")
+    handle.write(f"session: {session_id}\n")
+    handle.write(f"started: {datetime.now().isoformat(timespec='seconds')}\n")
+    handle.write(f"{'─' * 60}\n")
+    handle.flush()
+    return handle
+
+
+def _state_summary(session_id: str) -> str:
+    """Return a compact state summary string (used for both console and log)."""
     state = get_session_state(session_id)
     if not state:
-        return
-    print(
-        f"\n  [state] primary={state.get('primary_intent')} "
+        return ""
+    return (
+        f"  [state] primary={state.get('primary_intent')} "
         f"secondary={state.get('secondary_intent')} "
+        f"secondary_type={state.get('secondary_intent_type')} "
         f"support_active={state.get('support_is_active')} "
+        f"confidence={state.get('retrieval_confidence')} "
         f"history={state.get('intent_history')}"
     )
 
@@ -49,16 +68,31 @@ def chat(session_id: str, first_message: str | None = None, debug: bool = False)
     print(f"  Type 'quit' or Ctrl+C to exit.")
     print(f"{'─' * 60}\n")
 
+    log = _open_log(session_id)
+
     def _send(message: str) -> None:
+        ts = datetime.now().isoformat(timespec='seconds')
         print(f"You: {message}\n")
+        log.write(f"\n[{ts}] You: {message}\n")
+
         try:
             response = invoke(session_id, message)
         except Exception as exc:
             print(f"[error] {exc}")
+            log.write(f"[error] {exc}\n")
+            log.flush()
             return
+
         print(f"Agent: {response}\n")
-        if debug:
-            _print_state_summary(session_id)
+        log.write(f"[{datetime.now().isoformat(timespec='seconds')}] Agent: {response}\n")
+
+        summary = _state_summary(session_id)
+        if summary:
+            log.write(f"{summary}\n")
+        if debug and summary:
+            print(summary)
+
+        log.flush()
         print("─" * 60)
 
     if first_message:
@@ -69,16 +103,20 @@ def chat(session_id: str, first_message: str | None = None, debug: bool = False)
             user_input = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n[session ended]")
+            log.write(f"\n[{datetime.now().isoformat(timespec='seconds')}] session ended\n")
             break
 
         if not user_input:
             continue
         if user_input.lower() in ("quit", "exit", "q"):
             print("[session ended]")
+            log.write(f"\n[{datetime.now().isoformat(timespec='seconds')}] session ended\n")
             break
 
         print()
         _send(user_input)
+
+    log.close()
 
 
 def main() -> None:
@@ -89,9 +127,11 @@ def main() -> None:
     args = parser.parse_args()
 
     session_id = args.session or str(uuid.uuid4())
+    log_path = _LOGS_DIR / f"chat_{session_id}.log"
     if not args.session:
         print(f"\n[new session] {session_id}")
         print(f"[resume with] python scripts/chat.py --session {session_id}")
+    print(f"[logging to]  {log_path}")
 
     chat(session_id, first_message=args.message, debug=args.debug)
 

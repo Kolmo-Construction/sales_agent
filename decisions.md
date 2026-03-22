@@ -242,6 +242,12 @@ multi-intent turns be handled?
 > - Eval test cases must cover: mixed-intent single turns (compound and ambiguous), intent
 >   transitions across turns, past-tense vs. active support, and pure single-intent turns
 >   (regression — must be unchanged).
+> - **Intent classifier context window:** `classify_intent` receives only the last
+>   `INTENT_CONTEXT_WINDOW` messages (default: 6 = last 3 exchanges), not the full session
+>   history. Observed failure mode: a `support_request` from turn 1 kept bleeding into later
+>   turns as the highest-priority intent even when the user had clearly moved on to unrelated
+>   messages. `extract_context` is unaffected — it still sees the full history since
+>   activity/budget/conditions stated early remain relevant throughout the session.
 
 ---
 
