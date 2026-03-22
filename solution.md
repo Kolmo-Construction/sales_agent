@@ -46,8 +46,12 @@ START
 AgentState:
   session_id         str
   messages           list[Message]          # full conversation history
-  primary_intent     str | None             # product_search | education | support | oos
-  secondary_intent   str | None             # second intent in the same turn, if present (e.g. support + product_search)
+  primary_intent          str | None        # product_search | education | support | oos
+  secondary_intent        str | None        # second intent in the same turn, if present
+  secondary_intent_type   str | None        # "compound" | "ambiguous" | None
+                                            #   compound  — both intents explicitly requested; both must be fulfilled
+                                            #   ambiguous — message could be one intent or the other; model is uncertain
+                                            #               used as the proactive follow-up trigger in the synthesizer
   intent_history     list[str]              # all primary intents seen this session (append reducer)
                                             # synthesizer uses this to acknowledge transitions
                                             # e.g. ["support_request", "product_search"] →
@@ -70,10 +74,15 @@ merges the partial update back into the state before passing it to the next node
 **Multi-intent turns:** A single customer message may contain more than one intent
 (e.g. "my zipper broke — can you help me return it and recommend a replacement?").
 The classifier produces a `primary_intent` that drives graph routing, and an optional
-`secondary_intent` that flows through to the synthesizer. The synthesizer addresses
-both: it handles the support case first, then offers the product recommendation in the
-same response. `intent_history` accumulates across turns so the synthesizer can
-acknowledge transitions between intents naturally.
+`secondary_intent` that flows through to the synthesizer. A third field,
+`secondary_intent_type`, disambiguates two cases that require different handling:
+- `"compound"` — the customer explicitly asked for both; the synthesizer addresses both
+  in the same response (handle support first, then pivot to the product question).
+- `"ambiguous"` — the message could be one intent or the other; the synthesizer handles
+  the primary intent and appends a clarifying question ("Were you looking for product
+  recommendations, or more information first?"). This is the proactive follow-up signal.
+`intent_history` accumulates across turns so the synthesizer can acknowledge transitions
+between intents naturally.
 
 **Product catalog:** Amazon Sports & Outdoors dataset as the base corpus, augmented with
 300–500 manually curated REI products. Stored in Qdrant with both dense (semantic) and
@@ -90,6 +99,13 @@ provider class + catalog re-index — no changes to the retriever or any other s
 **Conversation persistence:** LangGraph checkpoints to PostgreSQL (one checkpoint per node
 per turn). A separate `user_summaries` table in PostgreSQL stores compressed session
 summaries for returning users.
+
+**Synthesizer secondary-intent handling:**
+| `secondary_intent_type` | Synthesizer behaviour |
+|---|---|
+| `"compound"` | Addresses both intents in the same response via `_SECONDARY_INTENT_BLOCKS` |
+| `"ambiguous"` | Handles primary intent, then closes with a single clarifying question (`_AMBIGUOUS_INTENT_BLOCK`) |
+| `None` | Single intent — no secondary instructions injected |
 
 **Key constraints:**
 - Safety is a hard gate — no deployment if safety score drops below threshold

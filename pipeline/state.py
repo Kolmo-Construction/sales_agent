@@ -10,7 +10,7 @@ state fields — all shared data lives here.
 
 --- Field ownership by node ---
 
-  classify_and_extract  →  intent, extracted_context, oos_sub_class, oos_complexity
+  classify_and_extract  →  intent, secondary_intent_type, extracted_context, oos_sub_class, oos_complexity
   check_completeness    →  (reads extracted_context, routes — no writes)
   ask_followup          →  messages (appends assistant follow-up)
   translate_specs       →  translated_specs
@@ -181,6 +181,13 @@ class AgentState(TypedDict):
     # both intents in the same response.
     # None when the turn contains only one intent.
 
+    secondary_intent_type: Optional[str]
+    # Output of Node 1. Only set when secondary_intent is not None.
+    # "compound"  — customer explicitly asked for both intents; both must be fulfilled.
+    # "ambiguous" — message could be one intent or the other; model is uncertain.
+    #               Synthesizer uses this as the proactive follow-up trigger.
+    # None when secondary_intent is None.
+
     support_is_active: bool
     # Output of Node 1. Only meaningful when support_request is one of the intents.
     # True  — support issue is open/active ("I need to return this").
@@ -261,6 +268,7 @@ def initial_state(session_id: str, user_message: str) -> AgentState:
         messages=[{"role": "user", "content": user_message}],
         primary_intent=None,
         secondary_intent=None,
+        secondary_intent_type=None,
         support_is_active=True,
         intent_history=[],
         extracted_context=None,

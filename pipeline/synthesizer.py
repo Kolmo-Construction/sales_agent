@@ -7,13 +7,20 @@ Handles six cases:
   1. product_search + exact match     → specific gear recommendation
   2. product_search + close match     → "we don't carry X, but here's the closest"
   3. product_search + no products     → honest acknowledgment, no hallucination
-  3. general_education               → helpful gear/technique explanation
-  4. support_request                 → hard-coded redirect to REI customer service
-  5. out_of_scope                    → sub-class-aware handler (_synthesize_oos):
+  4. general_education               → helpful gear/technique explanation
+  5. support_request                 → hard-coded redirect to REI customer service
+  6. out_of_scope                    → sub-class-aware handler (_synthesize_oos):
        social        → llama3.2, warm in-persona reply + redirect
        benign/simple → llama3.2, brief answer + redirect
        benign/complex→ gemma2:9b, fuller answer + redirect
        inappropriate → hard-coded rejection, no LLM call
+
+Secondary intent handling (secondary_intent_type):
+  compound  — both intents were explicitly requested; _SECONDARY_INTENT_BLOCKS instructs
+              the synthesizer to address the secondary intent after the primary.
+  ambiguous — message could be one intent or the other; _AMBIGUOUS_INTENT_BLOCK instructs
+              the synthesizer to close with a single clarifying question so the next turn
+              can proceed with confidence.
 
 Safety:
   - Reads data/ontology/safety_flags.json at module import.
@@ -85,7 +92,19 @@ Your recommendations are:
 If the customer asked a general question (not shopping), answer it helpfully and accurately.
 If the question is outside your expertise or unrelated to outdoor gear, say so politely."""
 
-# Injected when the turn also contains a secondary intent
+# Injected when secondary_intent_type == "ambiguous":
+# the message could be product_search OR general_education; ask rather than assume.
+_AMBIGUOUS_INTENT_BLOCK = (
+    "NOTE: The customer's message is ambiguous — it could mean they want product "
+    "recommendations OR general information about gear. Handle the primary intent above, "
+    "then close with a single short clarifying question to find out which they prefer. "
+    "Example: 'Were you looking for a specific product recommendation, or just learning "
+    "about what features to look for?' Keep the question natural and unforced — "
+    "do not ask multiple questions."
+)
+
+# Injected when secondary_intent_type == "compound":
+# both intents were explicitly requested; address both in the same response.
 _SECONDARY_INTENT_BLOCKS: dict[str, str] = {
     "product_search": (
         "The customer also wants a product recommendation. After handling the primary topic, "
@@ -316,6 +335,7 @@ def _build_system_prompt(
     safety_block: str,
     confidence: str | None = None,
     secondary_intent: str | None = None,
+    secondary_intent_type: str | None = None,
     support_is_active: bool = True,
     intent_history: list[str] | None = None,
     user_profile: str | None = None,
@@ -370,9 +390,14 @@ def _build_system_prompt(
                 "Briefly acknowledge it and move on — do not dwell on it."
             )
 
-    # Secondary intent — append instructions after the primary intent block
-    if secondary_intent and secondary_intent in _SECONDARY_INTENT_BLOCKS:
-        parts.append("\n" + _SECONDARY_INTENT_BLOCKS[secondary_intent])
+    # Secondary intent — behaviour depends on secondary_intent_type:
+    #   ambiguous → ask a clarifying question (don't assume which intent the customer wanted)
+    #   compound  → address both intents in the same response
+    if secondary_intent:
+        if secondary_intent_type == "ambiguous":
+            parts.append("\n" + _AMBIGUOUS_INTENT_BLOCK)
+        elif secondary_intent_type == "compound" and secondary_intent in _SECONDARY_INTENT_BLOCKS:
+            parts.append("\n" + _SECONDARY_INTENT_BLOCKS[secondary_intent])
 
     return "\n".join(parts)
 
@@ -473,6 +498,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
     """
     intent = state.get("primary_intent")
     secondary_intent: str | None = state.get("secondary_intent")
+    secondary_intent_type: str | None = state.get("secondary_intent_type")
     support_is_active: bool = state.get("support_is_active", True)
     intent_history: list[str] = state.get("intent_history") or []
     context: ExtractedContext | None = state.get("extracted_context")
@@ -482,8 +508,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
     user_profile: str | None = state.get("user_profile")
 
     logger.info(
-        "[synthesizer] primary=%s  secondary=%s  support_active=%s  products=%d  confidence=%s",
-        intent, secondary_intent, support_is_active, len(products), confidence,
+        "[synthesizer] primary=%s  secondary=%s  secondary_type=%s  support_active=%s  products=%d  confidence=%s",
+        intent, secondary_intent, secondary_intent_type, support_is_active, len(products), confidence,
     )
 
     with stage_span("synthesize", intent=intent or ""):
@@ -541,6 +567,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
             safety_block=safety_block,
             confidence=confidence,
             secondary_intent=secondary_intent,
+            secondary_intent_type=secondary_intent_type,
             support_is_active=support_is_active,
             intent_history=intent_history,
             user_profile=user_profile,
@@ -566,8 +593,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
 
         response = result.content.strip()
         logger.info(
-            "[synthesizer] case=%s  secondary=%s  disclaimers=%s  response_len=%d  (%.3fs)",
-            intent, secondary_intent, disclaimers_applied, len(response), time.perf_counter() - t0,
+            "[synthesizer] case=%s  secondary=%s  secondary_type=%s  disclaimers=%s  response_len=%d  (%.3fs)",
+            intent, secondary_intent, secondary_intent_type, disclaimers_applied, len(response), time.perf_counter() - t0,
         )
 
         return {

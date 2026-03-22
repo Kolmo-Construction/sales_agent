@@ -79,73 +79,114 @@ support_is_active:
   False — the support issue is past-tense / already resolved ("I already returned it", "that got sorted").
   Only meaningful when support_request is one of the intents. Default to True when uncertain.
 
-Return primary_intent, secondary_intent (null if only one intent), and support_is_active."""
+secondary_intent_type — only set when secondary_intent is not null:
+  compound  — the customer explicitly asked for BOTH intents and wants both addressed.
+              Both actions are real and should be fulfilled in the same response.
+              Example: "help me return this AND recommend a replacement jacket"
+  ambiguous — the message could plausibly fit one intent OR the other, but not clearly both.
+              You are uncertain which single intent applies; set secondary as the alternative.
+              Example: "tell me about sleeping bags for cold nights"
+              (product_search or general_education? — not obvious from the message alone)
+  null      — secondary_intent is null (only one intent detected)
+
+Return primary_intent, secondary_intent (null if only one intent), support_is_active,
+and secondary_intent_type (null when secondary_intent is null)."""
 
 INTENT_EXAMPLES: list[dict] = [
     {
         "message": "I need a sleeping bag for a winter camping trip in the Cascades.",
         "primary_intent": "product_search",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
     {
         "message": "What's the difference between down and synthetic insulation?",
         "primary_intent": "general_education",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
     {
         "message": "I want to return the jacket I bought last week.",
         "primary_intent": "support_request",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
     {
         "message": "What is the capital of France?",
         "primary_intent": "out_of_scope",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
     {
         "message": "Hi!",
         "primary_intent": "out_of_scope",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
     {
         "message": "Can you recommend a good trail running shoe for someone just starting out?",
         "primary_intent": "product_search",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
     {
         "message": "How do I waterproof my boots at home?",
         "primary_intent": "general_education",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": True,
     },
+    # compound — user explicitly asked for both actions in the same message
     {
         "message": "My zipper broke on my last trip — can you help me return it and also recommend a replacement jacket?",
         "primary_intent": "support_request",
         "secondary_intent": "product_search",
+        "secondary_intent_type": "compound",
         "support_is_active": True,
     },
     {
         "message": "I already returned the jacket. Now I want to find a replacement.",
         "primary_intent": "product_search",
         "secondary_intent": None,
+        "secondary_intent_type": None,
         "support_is_active": False,
     },
+    # compound — both intents explicitly requested
     {
         "message": "Can you recommend a tent? Also, how does double-wall construction work?",
         "primary_intent": "general_education",
         "secondary_intent": "product_search",
+        "secondary_intent_type": "compound",
         "support_is_active": True,
     },
+    # compound — both intents explicitly requested
     {
         "message": "My order never arrived. I need to sort that out, and I also want to know what boots work for mountaineering.",
         "primary_intent": "support_request",
         "secondary_intent": "product_search",
+        "secondary_intent_type": "compound",
+        "support_is_active": True,
+    },
+    # ambiguous — could be product_search ("show me options") or general_education ("explain to me")
+    {
+        "message": "Tell me about sleeping bags for cold nights.",
+        "primary_intent": "product_search",
+        "secondary_intent": "general_education",
+        "secondary_intent_type": "ambiguous",
+        "support_is_active": True,
+    },
+    # ambiguous — could be product_search or general_education; no explicit buy signal
+    {
+        "message": "What should I know about layering for winter hiking?",
+        "primary_intent": "general_education",
+        "secondary_intent": "product_search",
+        "secondary_intent_type": "ambiguous",
         "support_is_active": True,
     },
 ]
@@ -163,6 +204,14 @@ class IntentResult(BaseModel):
         description=(
             "A second distinct intent in the same message, if present. "
             "Null when the message contains only one intent."
+        )
+    )
+    secondary_intent_type: Optional[Literal["compound", "ambiguous"]] = Field(
+        default=None,
+        description=(
+            "Only set when secondary_intent is not null. "
+            "compound — customer explicitly asked for both intents; both must be addressed. "
+            "ambiguous — message could be one intent or the other; model is uncertain which single intent applies."
         )
     )
     support_is_active: bool = Field(
@@ -192,6 +241,7 @@ def classify_intent(messages: list[dict], provider: LLMProvider) -> IntentResult
         f'Message: "{ex["message"]}"\n'
         f'primary_intent: {ex["primary_intent"]}, '
         f'secondary_intent: {ex["secondary_intent"]}, '
+        f'secondary_intent_type: {ex.get("secondary_intent_type")}, '
         f'support_is_active: {ex["support_is_active"]}'
         for ex in _examples
     )
@@ -482,17 +532,19 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
         intent_result = classify_intent(messages, provider)
         primary_intent = intent_result.primary_intent
         secondary_intent = intent_result.secondary_intent
+        secondary_intent_type = intent_result.secondary_intent_type
         support_is_active = intent_result.support_is_active
         logger.info(
-            "[intent] → primary=%s  secondary=%s  support_active=%s  (%.3fs)",
-            primary_intent, secondary_intent, support_is_active, time.perf_counter() - t0,
+            "[intent] → primary=%s  secondary=%s  secondary_type=%s  support_active=%s  (%.3fs)",
+            primary_intent, secondary_intent, secondary_intent_type, support_is_active, time.perf_counter() - t0,
         )
 
         # Update span metadata so intent fields appear in Langfuse at the span level
         span.update(metadata={
-            "primary_intent":    primary_intent,
-            "secondary_intent":  secondary_intent,
-            "support_is_active": support_is_active,
+            "primary_intent":        primary_intent,
+            "secondary_intent":      secondary_intent,
+            "secondary_intent_type": secondary_intent_type,
+            "support_is_active":     support_is_active,
         })
 
         extracted_context: Optional[ExtractedContext] = None
@@ -527,6 +579,7 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
         return {
             "primary_intent": primary_intent,
             "secondary_intent": secondary_intent,
+            "secondary_intent_type": secondary_intent_type,
             "support_is_active": support_is_active,
             "intent_history": [primary_intent],  # append reducer merges into history
             "extracted_context": extracted_context,
