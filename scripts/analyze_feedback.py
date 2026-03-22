@@ -44,6 +44,12 @@ def _parse_args() -> argparse.Namespace:
         choices=["gear_specialist", "developer", "product_manager", "other"],
         help="Filter to a specific tester role",
     )
+    p.add_argument(
+        "--round",
+        metavar="LABEL",
+        default=None,
+        help="Filter to a specific testing round label (e.g. 2026-03-20 or round-2)",
+    )
     return p.parse_args()
 
 
@@ -180,18 +186,23 @@ def _section_by_stage(stats: dict) -> str:
     return f"## 4. Failure Stage Distribution\n\n{table}{note}"
 
 
-def _section_top_activities(conn, since: Optional[str], role: Optional[str]) -> str:
+def _section_top_activities(
+    conn, since: Optional[str], role: Optional[str], round_label: Optional[str]
+) -> str:
     """
     Extract top activities from extracted_context JSONB on thumbs-down turns.
     Uses a direct SQL query since get_stats() does not cover this dimension.
     """
-    date_filter = "AND created_at >= %(since)s" if since else ""
-    role_filter = "AND tester_role = %(role)s" if role else ""
+    date_filter  = "AND created_at >= %(since)s" if since else ""
+    role_filter  = "AND tester_role = %(role)s" if role else ""
+    round_filter = "AND round_label = %(round_label)s" if round_label else ""
     params: dict[str, Any] = {}
     if since:
         params["since"] = since
     if role:
         params["role"] = role
+    if round_label:
+        params["round_label"] = round_label
 
     from psycopg.rows import dict_row  # noqa: PLC0415
 
@@ -207,6 +218,7 @@ def _section_top_activities(conn, since: Optional[str], role: Optional[str]) -> 
               AND  extracted_context->>'activity' IS NOT NULL
               {date_filter}
               {role_filter}
+              {round_filter}
             GROUP  BY activity
             ORDER  BY down_count DESC
             LIMIT  15
@@ -231,7 +243,7 @@ def _section_top_activities(conn, since: Optional[str], role: Optional[str]) -> 
     return f"## 5. Top Activities in Thumbs-Down Turns\n\n{table}"
 
 
-def _section_uncaught(conn, since: Optional[str]) -> str:
+def _section_uncaught(conn, since: Optional[str], round_label: Optional[str] = None) -> str:
     """
     'Uncaught failures': thumbs-down turns where the pipeline produced a
     product_search response but no safety disclaimers were applied AND no
@@ -240,10 +252,13 @@ def _section_uncaught(conn, since: Optional[str]) -> str:
     These are the highest-priority candidates for new eval test cases —
     the automated eval suite may not be catching them.
     """
-    date_filter = "AND created_at >= %(since)s" if since else ""
+    date_filter  = "AND created_at >= %(since)s" if since else ""
+    round_filter = "AND round_label = %(round_label)s" if round_label else ""
     params: dict[str, Any] = {}
     if since:
         params["since"] = since
+    if round_label:
+        params["round_label"] = round_label
 
     from psycopg.rows import dict_row  # noqa: PLC0415
 
@@ -257,6 +272,7 @@ def _section_uncaught(conn, since: Optional[str]) -> str:
               AND  intent          = 'product_search'
               AND  (disclaimers_applied IS NULL OR array_length(disclaimers_applied, 1) IS NULL)
               {date_filter}
+              {round_filter}
             """,
             params,
         )
@@ -336,7 +352,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        stats = get_stats(conn, since=args.since)
+        stats = get_stats(conn, since=args.since, round_label=args.round)
     except Exception as e:
         print(f"ERROR querying feedback DB: {e}", file=sys.stderr)
         sys.exit(1)
@@ -348,6 +364,8 @@ def main() -> None:
         filters.append(f"since {args.since}")
     if args.role:
         filters.append(f"role = {args.role}")
+    if args.round:
+        filters.append(f"round = {args.round}")
     filter_note = f" ({', '.join(filters)})" if filters else ""
 
     print(f"# REI Gear Advisor — Feedback Report")
@@ -362,9 +380,9 @@ def main() -> None:
     print()
     print(_section_by_stage(stats))
     print()
-    print(_section_top_activities(conn, args.since, args.role))
+    print(_section_top_activities(conn, args.since, args.role, args.round))
     print()
-    print(_section_uncaught(conn, args.since))
+    print(_section_uncaught(conn, args.since, args.round))
     print()
     print(_section_action_items(stats))
 

@@ -20,6 +20,8 @@ Environment variables required (in .env):
 
 from __future__ import annotations
 
+import os
+import time
 import uuid
 from typing import Optional
 
@@ -27,6 +29,11 @@ import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Round label — set FEEDBACK_ROUND env var to tag events for a testing round.
+# Allows multi-round analysis without dropping the database between rounds.
+# Example: FEEDBACK_ROUND=2026-03-20  or  FEEDBACK_ROUND=round-2
+FEEDBACK_ROUND: Optional[str] = os.getenv("FEEDBACK_ROUND") or None
 
 # ---------------------------------------------------------------------------
 # Page config — must be the first Streamlit call
@@ -68,13 +75,16 @@ st.markdown(
 @st.cache_resource
 def _db():
     """
-    Return a psycopg connection to sales_agent_feedback.
+    Return a psycopg ConnectionPool for sales_agent_feedback.
+
+    Using a pool instead of a single connection prevents stale-connection
+    data loss: if the DB restarts, the pool reconnects automatically.
     Returns None if FEEDBACK_POSTGRES_DSN is not configured — the app
     degrades gracefully (chat still works, feedback is silently dropped).
     """
     try:
-        from feedback.store import get_connection
-        return get_connection()
+        from feedback.store import get_connection_pool  # noqa: PLC0415
+        return get_connection_pool()
     except Exception as exc:
         st.warning(
             f"Feedback DB unavailable — ratings will not be saved. ({exc})",
@@ -107,6 +117,7 @@ _ROLE_LABELS: dict[str, str] = {
 _STAGE_LABELS: list[str] = [
     "Intent — it misunderstood what kind of question I was asking",
     "Context — it missed information I had already provided",
+    "Translation — it converted my request to the wrong product specs",
     "Products — the products shown don't match my query",
     "Response — the products were fine but the recommendation text was wrong",
     "Nothing specific / hard to say",
@@ -179,7 +190,7 @@ def _render_onboarding() -> None:
 
 def _render_chat() -> None:
     agent_invoke, get_session_state = _agent()
-    conn = _db()
+    pool = _db()
 
     # --- Sidebar ---
     with st.sidebar:
@@ -188,6 +199,8 @@ def _render_chat() -> None:
             f"**Role:** {st.session_state.tester_role.replace('_', ' ').title()}"
         )
         st.caption(f"Session: `{st.session_state.session_id[:8]}…`")
+        if FEEDBACK_ROUND:
+            st.caption(f"Round: `{FEEDBACK_ROUND}`")
         st.divider()
 
         if not st.session_state.ended:
@@ -198,7 +211,7 @@ def _render_chat() -> None:
                 st.session_state.ended = True
                 st.rerun()
         else:
-            _render_end_of_session(conn)
+            _render_end_of_session(pool)
 
     # --- Header ---
     st.title("REI Gear Advisor")
@@ -207,7 +220,7 @@ def _render_chat() -> None:
 
     # --- Conversation history ---
     for turn in st.session_state.conversation:
-        _render_turn(turn, conn)
+        _render_turn(turn, pool)
 
     # --- Input ---
     if st.session_state.ended:
@@ -221,14 +234,14 @@ def _render_chat() -> None:
 
     prompt = st.chat_input("Ask about gear…", disabled=not last_rated)
     if prompt:
-        _handle_message(prompt, agent_invoke, get_session_state, conn)
+        _handle_message(prompt, agent_invoke, get_session_state, pool)
 
 
 # ---------------------------------------------------------------------------
 # Turn renderer
 # ---------------------------------------------------------------------------
 
-def _render_turn(turn: dict, conn) -> None:
+def _render_turn(turn: dict, pool) -> None:
     with st.chat_message(turn["role"]):
         st.markdown(turn["content"])
 
@@ -254,7 +267,7 @@ def _render_turn(turn: dict, conn) -> None:
         ):
             st.session_state[thumbs_key] = 1
             st.session_state[rated_key]  = True
-            _save_thumbs(conn, event_id, 1)
+            _save_thumbs(pool, event_id, 1)
             st.rerun()
     with c2:
         if st.button(
@@ -264,7 +277,7 @@ def _render_turn(turn: dict, conn) -> None:
         ):
             st.session_state[thumbs_key] = -1
             st.session_state[rated_key]  = True
-            _save_thumbs(conn, event_id, -1)
+            _save_thumbs(pool, event_id, -1)
             st.rerun()
     with c3:
         if already_rated:
@@ -273,7 +286,7 @@ def _render_turn(turn: dict, conn) -> None:
     # --- "Tell me more" expander: shown on 👎 until annotation is submitted ---
     if current_thumbs == -1 and not st.session_state.get(annotated_key, False):
         with st.expander("Tell us more (optional but helpful)", expanded=True):
-            _render_annotation(turn, event_id, turn_idx, annotated_key, conn)
+            _render_annotation(turn, event_id, turn_idx, annotated_key, pool)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +298,7 @@ def _render_annotation(
     event_id: Optional[int],
     turn_idx: int,
     annotated_key: str,
-    conn,
+    pool,
 ) -> None:
     from feedback.store import update_feedback, save_product_ratings  # noqa: PLC0415
 
@@ -322,14 +335,18 @@ def _render_annotation(
             })
 
     if st.button("Submit", key=f"submit_{turn_idx}", type="primary"):
-        if conn and event_id:
-            update_feedback(
-                conn, event_id,
-                failure_stage=_stage_to_key(stage_label),
-                correction=correction.strip() or None,
-            )
-            if product_ratings:
-                save_product_ratings(conn, event_id, product_ratings)
+        if pool and event_id:
+            try:
+                with pool.connection() as conn:
+                    update_feedback(
+                        conn, event_id,
+                        failure_stage=_stage_to_key(stage_label),
+                        correction=correction.strip() or None,
+                    )
+                    if product_ratings:
+                        save_product_ratings(conn, event_id, product_ratings)
+            except Exception:
+                pass
         st.session_state[annotated_key] = True
         st.rerun()
 
@@ -338,7 +355,7 @@ def _render_annotation(
 # End-of-session overall rating (sidebar)
 # ---------------------------------------------------------------------------
 
-def _render_end_of_session(conn) -> None:
+def _render_end_of_session(pool) -> None:
     if st.session_state.overall_submitted:
         st.success("Thanks for testing!")
         return
@@ -353,11 +370,14 @@ def _render_end_of_session(conn) -> None:
     rating_val = len(rating_stars)  # 1–5
 
     if st.button("Submit rating", use_container_width=True, type="primary"):
-        # Attach overall rating to the last assistant turn's event row
         last = _last_assistant_turn()
-        if last and last.get("event_id") and conn:
+        if last and last.get("event_id") and pool:
             from feedback.store import update_feedback  # noqa: PLC0415
-            update_feedback(conn, last["event_id"], overall_rating=rating_val)
+            try:
+                with pool.connection() as conn:
+                    update_feedback(conn, last["event_id"], overall_rating=rating_val)
+            except Exception:
+                pass
         st.session_state.overall_submitted = True
         st.rerun()
 
@@ -366,11 +386,12 @@ def _render_end_of_session(conn) -> None:
 # Message handler: invoke pipeline, save event, update conversation state
 # ---------------------------------------------------------------------------
 
-def _handle_message(prompt: str, agent_invoke, get_session_state, conn) -> None:
+def _handle_message(prompt: str, agent_invoke, get_session_state, pool) -> None:
     # Add user turn immediately so it renders while we wait for the agent
     st.session_state.conversation.append({"role": "user", "content": prompt})
 
     with st.spinner("Thinking…"):
+        t0 = time.monotonic()
         try:
             response = agent_invoke(
                 session_id=st.session_state.session_id,
@@ -380,6 +401,7 @@ def _handle_message(prompt: str, agent_invoke, get_session_state, conn) -> None:
         except Exception as exc:
             response = f"Something went wrong — please try again. ({exc})"
             state = None
+        latency_ms = int((time.monotonic() - t0) * 1000)
 
     response = response or "(No response returned)"
     turn_idx = st.session_state.turn_index
@@ -387,10 +409,11 @@ def _handle_message(prompt: str, agent_invoke, get_session_state, conn) -> None:
 
     # Save state snapshot to feedback DB before rendering
     event_id: Optional[int] = None
-    if conn:
+    if pool:
         try:
             from feedback.store import save_feedback_event  # noqa: PLC0415
-            event_id = save_feedback_event(conn, _build_event(state, turn_idx))
+            with pool.connection() as conn:
+                event_id = save_feedback_event(conn, _build_event(state, turn_idx, latency_ms))
         except Exception:
             pass  # storage failure must not block the chat
 
@@ -409,16 +432,17 @@ def _handle_message(prompt: str, agent_invoke, get_session_state, conn) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _save_thumbs(conn, event_id: Optional[int], thumbs: int) -> None:
-    if conn and event_id:
+def _save_thumbs(pool, event_id: Optional[int], thumbs: int) -> None:
+    if pool and event_id:
         from feedback.store import update_feedback  # noqa: PLC0415
         try:
-            update_feedback(conn, event_id, thumbs=thumbs)
+            with pool.connection() as conn:
+                update_feedback(conn, event_id, thumbs=thumbs)
         except Exception:
             pass
 
 
-def _build_event(state, turn_idx: int) -> dict:
+def _build_event(state, turn_idx: int, latency_ms: int = 0) -> dict:
     """Build the dict for save_feedback_event from an AgentState snapshot."""
     state = state or {}
     retrieved = state.get("retrieved_products") or []
@@ -433,13 +457,43 @@ def _build_event(state, turn_idx: int) -> dict:
         "tester_role":           st.session_state.tester_role,
         "intent":                state.get("intent"),
         "oos_sub_class":         state.get("oos_sub_class"),
+        "oos_complexity":        state.get("oos_complexity"),
+        "model_used":            _derive_model(state),
         "extracted_context":     state.get("extracted_context"),
         "translated_specs":      state.get("translated_specs"),
         "retrieved_product_ids": retrieved_ids,
         "response":              state.get("response"),
         "disclaimers_applied":   state.get("disclaimers_applied") or [],
         "messages":              state.get("messages") or [],
+        "response_latency_ms":   latency_ms or None,
+        "round_label":           FEEDBACK_ROUND,
     }
+
+
+def _derive_model(state: dict) -> str:
+    """
+    Derive which model handled synthesis for this turn.
+
+    Rules mirror the pipeline routing logic:
+      - OOS + simple complexity → fast model (ask_followup also uses fast model)
+      - Everything else → primary model
+    Reads LLM_FAST_MODEL / LLM_MODEL from env to match whatever the pipeline
+    was configured with at runtime.
+    """
+    fast = os.getenv("LLM_FAST_MODEL", "llama3.2:latest")
+    main = os.getenv("LLM_MODEL", "gemma2:9b")
+
+    intent = state.get("intent")
+    oos_complexity = state.get("oos_complexity")
+    translated_specs = state.get("translated_specs")
+
+    # OOS simple → fast model
+    if intent == "out_of_scope" and oos_complexity == "simple":
+        return fast
+    # Incomplete product_search (ask_followup path) → fast model
+    if intent == "product_search" and translated_specs is None:
+        return fast
+    return main
 
 
 def _extract_products(state) -> list[dict]:
@@ -476,6 +530,8 @@ def _stage_to_key(label: str) -> str:
         return "intent"
     if label.startswith("Context"):
         return "extraction"
+    if label.startswith("Translation"):
+        return "translation"
     if label.startswith("Products"):
         return "retrieval"
     if label.startswith("Response"):

@@ -52,7 +52,9 @@ OOS_SUBCLASS_TEMPERATURE: float = 0.0
 
 INTENT_SYSTEM_PROMPT = """\
 You are a customer intent classifier for an outdoor gear retailer.
-Classify the customer message into exactly one of the four intent categories below.
+
+A single message may contain more than one intent. Identify the primary intent and,
+if a second distinct intent is present, identify the secondary intent.
 
 Intent definitions:
   product_search    — customer wants a product recommendation or is comparing products.
@@ -62,85 +64,148 @@ Intent definitions:
   support_request   — customer needs help with an order, return, sizing, or store question.
   out_of_scope      — message is unrelated to outdoor gear or the retailer.
 
-Return only the intent field — no explanation."""
+Priority hierarchy — assign primary_intent by this order, NOT by order of mention:
+  1. support_request   (highest — unresolved problems must be addressed first)
+  2. general_education
+  3. product_search
+  4. out_of_scope      (lowest)
+
+Example: "Can you recommend a jacket? Also, my last order never arrived." →
+  primary_intent=support_request, secondary_intent=product_search
+  (support takes priority even though product was mentioned first)
+
+support_is_active:
+  True  — the support issue is current and unresolved ("I need to return this", "my order is missing").
+  False — the support issue is past-tense / already resolved ("I already returned it", "that got sorted").
+  Only meaningful when support_request is one of the intents. Default to True when uncertain.
+
+Return primary_intent, secondary_intent (null if only one intent), and support_is_active."""
 
 INTENT_EXAMPLES: list[dict] = [
     {
         "message": "I need a sleeping bag for a winter camping trip in the Cascades.",
-        "intent": "product_search",
+        "primary_intent": "product_search",
+        "secondary_intent": None,
+        "support_is_active": True,
     },
     {
         "message": "What's the difference between down and synthetic insulation?",
-        "intent": "general_education",
+        "primary_intent": "general_education",
+        "secondary_intent": None,
+        "support_is_active": True,
     },
     {
         "message": "I want to return the jacket I bought last week.",
-        "intent": "support_request",
+        "primary_intent": "support_request",
+        "secondary_intent": None,
+        "support_is_active": True,
     },
     {
         "message": "What is the capital of France?",
-        "intent": "out_of_scope",
+        "primary_intent": "out_of_scope",
+        "secondary_intent": None,
+        "support_is_active": True,
     },
     {
         "message": "Hi!",
-        "intent": "out_of_scope",
-    },
-    {
-        "message": "Thanks, that was really helpful!",
-        "intent": "out_of_scope",
+        "primary_intent": "out_of_scope",
+        "secondary_intent": None,
+        "support_is_active": True,
     },
     {
         "message": "Can you recommend a good trail running shoe for someone just starting out?",
-        "intent": "product_search",
+        "primary_intent": "product_search",
+        "secondary_intent": None,
+        "support_is_active": True,
     },
     {
         "message": "How do I waterproof my boots at home?",
-        "intent": "general_education",
+        "primary_intent": "general_education",
+        "secondary_intent": None,
+        "support_is_active": True,
+    },
+    {
+        "message": "My zipper broke on my last trip — can you help me return it and also recommend a replacement jacket?",
+        "primary_intent": "support_request",
+        "secondary_intent": "product_search",
+        "support_is_active": True,
+    },
+    {
+        "message": "I already returned the jacket. Now I want to find a replacement.",
+        "primary_intent": "product_search",
+        "secondary_intent": None,
+        "support_is_active": False,
+    },
+    {
+        "message": "Can you recommend a tent? Also, how does double-wall construction work?",
+        "primary_intent": "general_education",
+        "secondary_intent": "product_search",
+        "support_is_active": True,
+    },
+    {
+        "message": "My order never arrived. I need to sort that out, and I also want to know what boots work for mountaineering.",
+        "primary_intent": "support_request",
+        "secondary_intent": "product_search",
+        "support_is_active": True,
     },
 ]
 
 
 class IntentResult(BaseModel):
-    intent: Literal["product_search", "general_education", "support_request", "out_of_scope"] = Field(
+    primary_intent: Literal["product_search", "general_education", "support_request", "out_of_scope"] = Field(
         description=(
-            "The customer's intent. One of: product_search, general_education, "
-            "support_request, out_of_scope."
+            "The dominant intent, assigned by priority hierarchy (support > education > product > oos), "
+            "NOT by order of mention in the message."
+        )
+    )
+    secondary_intent: Optional[Literal["product_search", "general_education", "support_request", "out_of_scope"]] = Field(
+        default=None,
+        description=(
+            "A second distinct intent in the same message, if present. "
+            "Null when the message contains only one intent."
+        )
+    )
+    support_is_active: bool = Field(
+        default=True,
+        description=(
+            "True if the support issue is current and unresolved. "
+            "False if the support issue is past-tense or already resolved. "
+            "Only meaningful when support_request is one of the intents."
         )
     )
 
 
-def classify_intent(messages: list[dict], provider: LLMProvider) -> str:
+def classify_intent(messages: list[dict], provider: LLMProvider) -> IntentResult:
     """
-    Classify the customer's intent from conversation history.
+    Classify the customer's intent(s) from conversation history.
 
-    Uses the fast model — this is a simple classification task.
-    Returns one of the four intent string literals.
+    Returns an IntentResult with primary_intent, secondary_intent, and support_is_active.
+    primary_intent drives graph routing; secondary_intent flows to the synthesizer.
+    Uses the fast model — classification is a lightweight structured task.
     """
-    # Build a summary prompt from the full conversation history.
-    # Only the last user turn is strictly needed for classification,
-    # but including prior context helps when intent becomes clear mid-conversation.
     conversation = "\n".join(
         f"{m['role'].upper()}: {m['content']}" for m in messages
     )
 
-    # Inject few-shot examples as part of the system prompt
     _examples = _ov("intent_few_shot_examples", INTENT_EXAMPLES)
     examples_text = "\n".join(
-        f'Message: "{ex["message"]}"\nIntent: {ex["intent"]}'
+        f'Message: "{ex["message"]}"\n'
+        f'primary_intent: {ex["primary_intent"]}, '
+        f'secondary_intent: {ex["secondary_intent"]}, '
+        f'support_is_active: {ex["support_is_active"]}'
         for ex in _examples
     )
     system = _ov("intent_classification_prompt", INTENT_SYSTEM_PROMPT) + f"\n\nExamples:\n{examples_text}"
 
     llm_messages = [Message(role="user", content=f"Classify this conversation:\n\n{conversation}")]
 
-    result = provider.complete_structured(
+    return provider.complete_structured(
         messages=llm_messages,
         schema=IntentResult,
         system=system,
         temperature=INTENT_TEMPERATURE,
         use_fast_model=True,
     )
-    return result.intent
 
 
 # ---------------------------------------------------------------------------
@@ -411,14 +476,27 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
     last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
     logger.info("[intent] query=%r", last_user[:120])
 
-    with stage_span("classify_and_extract", query=last_user[:200]):
+    with stage_span("classify_and_extract", query=last_user[:200]) as span:
 
         t0 = time.perf_counter()
-        intent = classify_intent(messages, provider)
-        logger.info("[intent] → intent=%s  (%.3fs)", intent, time.perf_counter() - t0)
+        intent_result = classify_intent(messages, provider)
+        primary_intent = intent_result.primary_intent
+        secondary_intent = intent_result.secondary_intent
+        support_is_active = intent_result.support_is_active
+        logger.info(
+            "[intent] → primary=%s  secondary=%s  support_active=%s  (%.3fs)",
+            primary_intent, secondary_intent, support_is_active, time.perf_counter() - t0,
+        )
+
+        # Update span metadata so intent fields appear in Langfuse at the span level
+        span.update(metadata={
+            "primary_intent":    primary_intent,
+            "secondary_intent":  secondary_intent,
+            "support_is_active": support_is_active,
+        })
 
         extracted_context: Optional[ExtractedContext] = None
-        if intent == "product_search":
+        if primary_intent == "product_search":
             t1 = time.perf_counter()
             extracted_context = extract_context(messages, provider)
             logger.info(
@@ -436,7 +514,7 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
 
         oos_sub_class: Optional[str] = None
         oos_complexity: Optional[str] = None
-        if intent == "out_of_scope":
+        if primary_intent == "out_of_scope":
             t2 = time.perf_counter()
             oos_result = classify_oos_subtype(messages, provider)
             oos_sub_class = oos_result.sub_class
@@ -447,7 +525,10 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
             )
 
         return {
-            "intent": intent,
+            "primary_intent": primary_intent,
+            "secondary_intent": secondary_intent,
+            "support_is_active": support_is_active,
+            "intent_history": [primary_intent],  # append reducer merges into history
             "extracted_context": extracted_context,
             "oos_sub_class": oos_sub_class,
             "oos_complexity": oos_complexity,

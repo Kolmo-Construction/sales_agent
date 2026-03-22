@@ -46,19 +46,34 @@ START
 AgentState:
   session_id         str
   messages           list[Message]          # full conversation history
-  intent             str | None             # product_search | education | support | oos
+  primary_intent     str | None             # product_search | education | support | oos
+  secondary_intent   str | None             # second intent in the same turn, if present (e.g. support + product_search)
+  intent_history     list[str]              # all primary intents seen this session (append reducer)
+                                            # synthesizer uses this to acknowledge transitions
+                                            # e.g. ["support_request", "product_search"] →
+                                            # "Now that we've sorted the return, here's what I'd recommend..."
   extracted_context  ExtractedContext | None
   oos_sub_class      str | None             # social | benign | inappropriate (OOS turns only)
   oos_complexity     str | None             # simple | complex (benign OOS only; drives model selection)
   translated_specs   ProductSpecs | None
   retrieved_products    list[Product] | None
   retrieval_confidence  str | None             # exact | close | none (set by retriever)
+  user_profile       str | None             # pre-rendered text block from purchase history lookup
+                                            # fetched at session start by user_id; injected into synthesizer
   response              str | None
   disclaimers_applied list[str]
 ```
 
 Each node receives the full state and returns only the fields it modifies. LangGraph
 merges the partial update back into the state before passing it to the next node.
+
+**Multi-intent turns:** A single customer message may contain more than one intent
+(e.g. "my zipper broke — can you help me return it and recommend a replacement?").
+The classifier produces a `primary_intent` that drives graph routing, and an optional
+`secondary_intent` that flows through to the synthesizer. The synthesizer addresses
+both: it handles the support case first, then offers the product recommendation in the
+same response. `intent_history` accumulates across turns so the synthesizer can
+acknowledge transitions between intents naturally.
 
 **Product catalog:** Amazon Sports & Outdoors dataset as the base corpus, augmented with
 300–500 manually curated REI products. Stored in Qdrant with both dense (semantic) and
@@ -89,14 +104,36 @@ summaries for returning users.
 ### 3.1 What to Measure — Per Stage
 
 #### Stage 1: Intent Classification
-| Metric | Method |
-|---|---|
-| Accuracy / F1 per class | Deterministic — labeled test set + sklearn |
-| Confusion matrix | Identifies which intents bleed into each other |
-| Out-of-scope recall | Ensures unsafe/irrelevant queries are correctly rejected |
-| OOS sub-class accuracy | Deterministic — `evals/datasets/oos_subclass/golden.jsonl`; checks social/benign/inappropriate split and simple/complex complexity |
+| Metric | Gate | Method |
+|---|---|---|
+| Primary intent accuracy | Yes (≥ 0.88) | Deterministic — `evals/datasets/intent/golden.jsonl` (54 examples) + sklearn |
+| Macro F1 across all classes | Yes (≥ 0.92) | sklearn macro F1 |
+| Per-class F1 | Yes (≥ 0.80 each) | sklearn per-class F1 |
+| OOS recall | Yes (≥ 0.90) | Recall for `out_of_scope` class — misclassifying OOS as product_search wastes user's time |
+| OOS sub-class accuracy | No (track trend) | `evals/datasets/oos_subclass/golden.jsonl` (32 examples); social/benign/inappropriate + complexity |
+| Priority hierarchy respected | Yes | `support_request` must never be assigned as secondary when it should be primary |
+| Secondary intent detection accuracy | Yes (≥ 0.75) | Multi-intent labeled examples only; lower floor — a miss doesn't break routing |
+| `support_is_active` accuracy | No (track trend) | Whether the classifier correctly detects past-tense vs. active support issues |
 
 Intent classes: `product_search`, `general_education`, `support_request`, `out_of_scope`
+
+**Multi-intent classification:** The classifier produces `primary_intent` (drives routing)
+and `secondary_intent` (optional, flows to synthesizer). `primary_intent` is assigned by
+priority hierarchy (support > education > product > oos), not by order of mention.
+`support_is_active` distinguishes active from past-tense support issues.
+
+Dataset schema for multi-intent examples:
+```json
+{
+  "query": "...",
+  "expected_intent": "support_request",
+  "expected_secondary_intent": "product_search",
+  "expected_support_is_active": true,
+  "notes": "..."
+}
+```
+Single-intent examples omit `expected_secondary_intent` (null) and `expected_support_is_active`
+(test skips those fields). This keeps the dataset backward-compatible.
 
 **OOS sub-classification accuracy** is evaluated via `evals/datasets/oos_subclass/golden.jsonl`
 (32 examples covering social, benign/simple, benign/complex, and inappropriate).
@@ -164,6 +201,7 @@ Six dimensions evaluated independently:
 | Context retention score | In turn N, does it remember information from turn 1? |
 | Repeated question rate | Does it ask for information already provided? (programmatic check) |
 | Full-conversation coherence | LLM judge scores the complete dialogue arc |
+| Intent transition framing | When intent changes across turns (e.g. support → product), does the synthesizer acknowledge it naturally rather than treating it as a cold start? |
 
 #### Stage 7: Graceful Degradation
 Scenario-based pass/fail tests:
@@ -179,6 +217,9 @@ Scenario-based pass/fail tests:
 | Out-of-scope / inappropriate | Hard rejection, no partial answer |
 | Contradictory constraints | Surfaces the conflict rather than silently ignoring one |
 | Dangerous activity with no disclaimer | Hard fail — safety gate blocks |
+| Mixed intent — active support + product (deg014) | Contact info present AND product ask acknowledged in same response |
+| Mixed intent — resolved support + product (deg015) | Classifier assigns product_search as primary; response does not open with support redirect |
+| Intent transition across turns (support → product) | Synthesizer acknowledges the transition; does not treat it as a cold start |
 
 ---
 
@@ -194,6 +235,21 @@ Exact expected outputs frozen for high-confidence cases. Any change that regress
 
 **Tier 3 — Adversarial / Stress Set (~50 examples)**
 Deliberately hard cases: contradictory constraints, minimal context, budget impossibilities, dangerous-activity scenarios, and queries designed to trigger hallucination.
+
+**Dataset inventory (current):**
+
+| Dataset | Path | Count | Purpose |
+|---|---|---|---|
+| Intent golden | `evals/datasets/intent/golden.jsonl` | 54 | Primary intent accuracy gate; includes 6 multi-intent examples |
+| Intent edge cases | `evals/datasets/intent/edge_cases.jsonl` | 24 | Boundary cases; includes 4 multi-intent boundary cases |
+| Intent staging | `evals/datasets/intent/staging.jsonl` | — | Pending human review before promotion to golden |
+| OOS sub-class | `evals/datasets/oos_subclass/golden.jsonl` | 32 | Social/benign/inappropriate + complexity |
+| Extraction golden | `evals/datasets/extraction/golden.jsonl` | 65 | Context field extraction |
+| Extraction edge cases | `evals/datasets/extraction/edge_cases.jsonl` | 20 | Boundary extraction cases |
+| Synthesis golden | `evals/datasets/synthesis/golden.jsonl` | 14 | End-to-end synthesis with pre-retrieved products |
+| Safety critical | `evals/datasets/synthesis/safety_critical.jsonl` | 13 | All 10 flagged activities + edge cases |
+| Multi-turn conversations | `evals/datasets/multiturn/conversations.jsonl` | 8 | Context accumulation + follow-up tests |
+| Degradation scenarios | `evals/datasets/multiturn/degradation.jsonl` | 15 | Ambiguous, OOS, support, zero-results, budget conflicts, multi-intent |
 
 **Synthetic generation workflow:** Use an LLM to generate diverse queries from a seed taxonomy (activity × environment × experience × budget), then domain experts review and label. Gets you to 200+ labeled examples quickly before real customer data is available.
 

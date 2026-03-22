@@ -121,7 +121,7 @@ def _run_pipeline(query: str, llm_provider, embedding_provider):
     if context.budget_usd:
         specs.extra["budget_usd_max"] = context.budget_usd
 
-    products = search(specs, embedding_provider, k=RETRIEVAL_K)
+    products, _top_score = search(specs, embedding_provider, k=RETRIEVAL_K)
     return context, specs, products
 
 

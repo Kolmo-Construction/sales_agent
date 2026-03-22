@@ -64,6 +64,11 @@ Customer context:
   Duration:         {duration}
   Group size:       {group_size}"""
 
+# Support contact details — referenced in _SECONDARY_INTENT_BLOCKS and _build_system_prompt.
+# When PersonaConfig is implemented (D7), these move into the persona object.
+_SUPPORT_URL = "REI.com/help"
+_SUPPORT_PHONE = "1-800-426-4840"
+
 # Core persona prompt — optimizer tunes this (Class A parameter)
 SYSTEM_PROMPT = """\
 You are an REI gear specialist — knowledgeable, approachable, and safety-conscious.
@@ -79,6 +84,32 @@ Your recommendations are:
 
 If the customer asked a general question (not shopping), answer it helpfully and accurately.
 If the question is outside your expertise or unrelated to outdoor gear, say so politely."""
+
+# Injected when the turn also contains a secondary intent
+_SECONDARY_INTENT_BLOCKS: dict[str, str] = {
+    "product_search": (
+        "The customer also wants a product recommendation. After handling the primary topic, "
+        "acknowledge their product interest and offer to help — but only if you have retrieved "
+        "products available. If no products were retrieved, invite them to share more details "
+        "so you can find the right gear on their next message."
+    ),
+    "general_education": (
+        "The customer also has a gear knowledge question. After handling the primary topic, "
+        "briefly address their educational question or invite them to ask it directly."
+    ),
+    "support_request": (
+        f"The customer also has a support or order issue. After handling the primary topic, "
+        f"direct them to REI customer service at {_SUPPORT_URL} or {_SUPPORT_PHONE}."
+    ),
+}
+
+# Injected when a prior support_request turn is detected in intent_history
+_INTENT_TRANSITION_BLOCK = (
+    "NOTE: Earlier in this conversation the customer had a support issue. "
+    "Acknowledge the transition naturally — e.g. 'Now that we've sorted that out, "
+    "let me help you find the right gear.' Keep the acknowledgement brief (one clause); "
+    "do not dwell on the past issue."
+)
 
 # Safety instruction block — injected when activity has a flag
 SAFETY_BLOCK_TEMPLATE = """\
@@ -284,14 +315,28 @@ def _build_system_prompt(
     products: list[Product],
     safety_block: str,
     confidence: str | None = None,
+    secondary_intent: str | None = None,
+    support_is_active: bool = True,
+    intent_history: list[str] | None = None,
+    user_profile: str | None = None,
 ) -> str:
     parts = [_ov("synthesizer_system_prompt", SYSTEM_PROMPT)]
 
     if safety_block:
         parts.append(safety_block)
 
+    # Purchase history — inject before customer context so LLM sees it as background
+    if user_profile:
+        parts.append(f"\nCustomer purchase history:\n{user_profile}")
+
     if context:
         parts.append("\n" + _format_context(context))
+
+    # Intent transition framing — fires when a prior support turn has resolved
+    # and the current intent has moved on to something else
+    history = intent_history or []
+    if intent != "support_request" and "support_request" in history[:-1]:
+        parts.append("\n" + _INTENT_TRANSITION_BLOCK)
 
     if intent == "product_search":
         parts.append("\n" + _format_products(products))
@@ -311,19 +356,30 @@ def _build_system_prompt(
                 "exact matches. Do not invent products outside this list."
             )
 
+    elif intent == "support_request":
+        # For active support issues, tell the LLM how to frame the support redirect
+        if support_is_active:
+            parts.append(
+                f"\nNOTE: The customer has an active support or order issue. "
+                f"Direct them to REI customer service at {_SUPPORT_URL} or {_SUPPORT_PHONE} "
+                f"as your first priority."
+            )
+        else:
+            parts.append(
+                "\nNOTE: The customer mentioned a support issue that is already resolved. "
+                "Briefly acknowledge it and move on — do not dwell on it."
+            )
+
+    # Secondary intent — append instructions after the primary intent block
+    if secondary_intent and secondary_intent in _SECONDARY_INTENT_BLOCKS:
+        parts.append("\n" + _SECONDARY_INTENT_BLOCKS[secondary_intent])
+
     return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
 # Non-product-search response stubs
 # ---------------------------------------------------------------------------
-
-_SUPPORT_RESPONSE = (
-    "Happy to help! For order questions, returns, and store inquiries, "
-    "your best resource is REI's customer service team — they can pull up your account "
-    "and handle everything directly. You can reach them at REI.com/help or call "
-    "1-800-426-4840. Is there anything gear-related I can help you with today?"
-)
 
 _OOS_INAPPROPRIATE_RESPONSE = (
     "I'm here to help with outdoor gear and adventures — let's keep things on that track. "
@@ -415,13 +471,20 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
       disclaimers_applied — list of safety flag keys injected (for eval gate)
       messages           — appends {"role": "assistant", "content": response}
     """
-    intent = state.get("intent")
+    intent = state.get("primary_intent")
+    secondary_intent: str | None = state.get("secondary_intent")
+    support_is_active: bool = state.get("support_is_active", True)
+    intent_history: list[str] = state.get("intent_history") or []
     context: ExtractedContext | None = state.get("extracted_context")
     products: list[Product] = state.get("retrieved_products") or []
     confidence: str | None = state.get("retrieval_confidence")
     messages: list[dict] = state.get("messages", [])
+    user_profile: str | None = state.get("user_profile")
 
-    logger.info("[synthesizer] intent=%s  products=%d  confidence=%s", intent, len(products), confidence)
+    logger.info(
+        "[synthesizer] primary=%s  secondary=%s  support_active=%s  products=%d  confidence=%s",
+        intent, secondary_intent, support_is_active, len(products), confidence,
+    )
 
     with stage_span("synthesize", intent=intent or ""):
 
@@ -429,15 +492,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
 
         t0 = time.perf_counter()
 
-        # --- Non-product-search intents ---
-        if intent == "support_request":
-            logger.info("[synthesizer] case=support_request → hard-coded redirect")
-            return {
-                "response": _SUPPORT_RESPONSE,
-                "disclaimers_applied": [],
-                "messages": [{"role": "assistant", "content": _SUPPORT_RESPONSE}],
-            }
-
+        # --- OOS is handled separately (unchanged) ---
         if intent == "out_of_scope":
             result = _synthesize_oos(state, provider)
             logger.info(
@@ -472,8 +527,24 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
             elif confidence == "close":
                 logger.info("[synthesizer] close match — framing as nearest alternative")
 
+        if intent == "support_request":
+            logger.info(
+                "[synthesizer] case=support_request  active=%s  secondary=%s",
+                support_is_active, secondary_intent,
+            )
+
         # --- Build system prompt ---
-        system = _build_system_prompt(intent, context, products, safety_block, confidence)
+        system = _build_system_prompt(
+            intent=intent,
+            context=context,
+            products=products,
+            safety_block=safety_block,
+            confidence=confidence,
+            secondary_intent=secondary_intent,
+            support_is_active=support_is_active,
+            intent_history=intent_history,
+            user_profile=user_profile,
+        )
 
         # --- Build message list for LLM ---
         # Pass full conversation history so multi-turn context is preserved.
@@ -495,8 +566,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
 
         response = result.content.strip()
         logger.info(
-            "[synthesizer] case=%s  disclaimers=%s  response_len=%d  (%.3fs)",
-            intent, disclaimers_applied, len(response), time.perf_counter() - t0,
+            "[synthesizer] case=%s  secondary=%s  disclaimers=%s  response_len=%d  (%.3fs)",
+            intent, secondary_intent, disclaimers_applied, len(response), time.perf_counter() - t0,
         )
 
         return {

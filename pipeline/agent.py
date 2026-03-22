@@ -36,8 +36,11 @@ from __future__ import annotations
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
 import os
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from pipeline.embeddings import default_provider as default_embedding_provider
 from pipeline.graph import build_graph
@@ -123,7 +126,27 @@ def invoke(session_id: str, user_message: str) -> str:
     try:
         result = graph.invoke(input_data, config=config)
         response = result.get("response") or ""
-        trace.update(output=response)
+
+        # Extract intent fields for logging and tracing
+        primary        = result.get("primary_intent")
+        secondary      = result.get("secondary_intent")
+        support_active = result.get("support_is_active")
+        history        = result.get("intent_history") or []
+
+        logger.info(
+            "[turn] session=%s primary=%s secondary=%s support_active=%s history=%s",
+            session_id[:8], primary, secondary, support_active, history,
+        )
+
+        trace.update(
+            output=response,
+            metadata={
+                "primary_intent":    primary,
+                "secondary_intent":  secondary,
+                "support_is_active": support_active,
+                "intent_history":    history,
+            },
+        )
         return response
     finally:
         reset_trace(token)

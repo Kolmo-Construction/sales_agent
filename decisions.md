@@ -160,3 +160,167 @@ This drives how the agent orchestrator reads and writes session state (R12).
 >   from the LangGraph-managed checkpoint tables.
 > - Each conversation session maps to a LangGraph `thread_id` (= `session_id`). This is
 >   the key used to resume a conversation on subsequent turns.
+
+---
+
+## D5: How is intent classified when a single message contains multiple intents?
+
+**Question:** A customer can have more than one intent in a single turn
+(e.g. "my zipper broke — can you help me return it and also recommend a replacement jacket?").
+The original single-intent classifier picks one and silently drops the other. How should
+multi-intent turns be handled?
+
+**Options considered:**
+- **Single intent, pick primary** — simple, but discards the secondary intent; bad UX when
+  both intents are actionable in the same response
+- **Multi-intent schema with primary + optional secondary** — classifier returns two fields;
+  routing uses primary, synthesizer addresses both; minimal change to graph topology
+- **Intent segmentation** — split the message into sub-queries, each routed independently;
+  more complex, higher latency, requires merging responses
+
+**Answer:**
+> **Multi-intent schema: `primary_intent` + `secondary_intent` + `support_is_active`, with
+> a fixed priority hierarchy determining which intent is primary.**
+>
+> **Priority hierarchy (high → low):**
+> ```
+> 1. support_request    — user has an active, unresolved problem
+> 2. general_education  — user wants to understand before deciding
+> 3. product_search     — commercial recommendation
+> 4. out_of_scope       — handled separately, always last
+> ```
+>
+> The classifier assigns `primary_intent` according to this hierarchy, regardless of the
+> order the user mentioned the intents. A user who mentions a product question first but
+> also has an unresolved support issue still gets `primary_intent=support_request`.
+>
+> **Why support first:** a user with an open problem is not in a receptive state for a
+> recommendation. Acknowledging and routing the problem before recommending products
+> is the correct UX. The synthesizer then pivots naturally: "While we sort that out,
+> here's what I'd recommend as a replacement…"
+>
+> **Why education before product:** explaining a concept first (e.g. "how does down
+> insulation work?") lets the user evaluate the recommendation that follows. Reversing
+> this gives them a recommendation they cannot yet assess.
+>
+> **`support_is_active: bool`** — distinguishes active from past-tense support issues.
+> "I need to return this" → `support_is_active=True` (handle support first).
+> "I already returned it — now I want a replacement" → `support_is_active=False`
+> (support is resolved; treat product_search as effective primary). When False, the
+> synthesizer briefly acknowledges the past issue and focuses on the product response.
+>
+> `intent_history: list[str]` is added to `AgentState` with an append reducer. Every turn
+> appends `primary_intent`. The synthesizer reads `intent_history` to acknowledge natural
+> transitions across turns (e.g. support → product_search → "Now that we've sorted the
+> return, here's what I'd recommend as a replacement…").
+
+**Constraints imposed on build:**
+> - `IntentResult` schema in `pipeline/intent.py` gains `secondary_intent: Optional[Literal[...]]`
+>   and `support_is_active: bool` fields.
+> - `INTENT_SYSTEM_PROMPT` must explain the priority hierarchy and instruct the model to
+>   assign `primary_intent` by hierarchy, not by order of mention. Multi-intent few-shot
+>   examples must be added.
+> - `AgentState` replaces `intent: str | None` with `primary_intent`, `secondary_intent`,
+>   `support_is_active`, and `intent_history` (append reducer).
+> - `route_after_classify` in `pipeline/graph.py` reads `primary_intent` — no other routing change.
+> - When `primary_intent=support_request` and `secondary_intent=product_search`, the product
+>   retrieval pipeline does **not** run (routing is based on primary only). The synthesizer
+>   handles support, then invites the user to follow up with the product question. Full
+>   dual-pipeline execution is a future enhancement.
+> - `synthesize` in `pipeline/synthesizer.py` receives both intents, `support_is_active`,
+>   and `intent_history`; `_build_system_prompt` assembles context-aware instructions.
+> - The support response (`_SUPPORT_RESPONSE`) becomes a prompt block rather than a
+>   hardcoded string, so the synthesizer can combine it with a product pivot when secondary
+>   intent is present.
+> - Eval test cases must cover: mixed-intent single turns, intent transitions across turns,
+>   past-tense vs. active support, and pure single-intent turns (regression — must be unchanged).
+
+---
+
+## D6: How is user purchase history integrated?
+
+**Question:** REI has existing purchase history data per customer. Should this be part of
+the agent pipeline or a separate recommendation engine?
+
+**Options considered:**
+- **Separate recommendation engine** — clean separation of concerns; best if REI already has
+  one; requires a service boundary and API contract
+- **Integrated into the agent** — purchase history fetched at session start and injected as
+  text context into the synthesizer; no separate service needed
+- **Ignored entirely** — stateless agent; no personalization
+
+**Answer:**
+> **Integrated into the agent as a session-start lookup.**
+>
+> REI has purchase history but no recommendation engine. Building a separate service is
+> premature. Instead: at conversation start, fetch the user's purchase history from Postgres
+> (or a REI backend API) by `user_id`, render it as a plain-text block, and store it in
+> `AgentState.user_profile`. The synthesizer injects this block into the system prompt.
+>
+> The LLM does the reasoning — "they own a 3-season tent, they're asking about winter
+> camping, so they need a 4-season shelter." No collaborative filtering, no embeddings
+> over user history, no model training.
+>
+> If REI later builds a recommendation engine, the integration point is the same:
+> a lookup at session start that populates `user_profile`. The agent is the consumer
+> of personalization, not the owner.
+
+**Constraints imposed on build:**
+> - `AgentState` gains a `user_profile: str | None` field and a `user_id: str | None` field.
+> - A `fetch_user_profile(user_id)` function (new module or added to `pipeline/agent.py`)
+>   queries Postgres and renders a short prose summary of past purchases.
+> - This fetch runs **in parallel with `classify_intent`** (both depend only on session start
+>   data, not on each other) — do not run sequentially.
+> - Anonymous sessions (`user_id=None`) skip the lookup; `user_profile` stays None.
+> - The synthesizer's `_build_system_prompt` injects `user_profile` when present.
+> - Purchase history must never be logged to Langfuse traces in a way that leaks PII.
+
+---
+
+## D7: How is the agent persona configured?
+
+**Question:** The agent is currently hardcoded as an "REI gear specialist." What if the
+operator wants a different brand voice, or a pure advisory mode where the user wants help
+without being sold to?
+
+**Options considered:**
+- **Hardcoded prompts** — current state; no configurability; persona change requires a code deploy
+- **Prompt overrides via the optimizer override system** — already exists (`_ov()`); works
+  per-parameter but has no concept of a coherent persona object
+- **`PersonaConfig` dataclass** — all persona-specific strings centralised; loaded at startup;
+  passed into `build_graph()`; supports a `mode` flag for sales vs. advisory
+
+**Answer:**
+> **`PersonaConfig` dataclass, loaded at startup, passed into `build_graph()`.**
+>
+> The persona is scattered across 5 prompt strings today:
+> `SYSTEM_PROMPT`, `_OOS_SOCIAL_SYSTEM_PROMPT`, `_OOS_BENIGN_SYSTEM_PROMPT`,
+> `_SUPPORT_RESPONSE` (hardcoded, not a prompt), and `FOLLOWUP_SYSTEM_PROMPT`.
+>
+> `PersonaConfig` centralises these:
+> ```
+> PersonaConfig:
+>   name              str      # "REI gear specialist"
+>   brand             str      # "REI"
+>   mode              str      # "sales" | "advisory"
+>   support_url       str      # "REI.com/help"
+>   support_phone     str      # "1-800-426-4840"
+>   system_prompt     str | None   # override; defaults to built-in if None
+>   oos_social_prompt str | None
+>   oos_benign_prompt str | None
+>   followup_prompt   str | None
+> ```
+>
+> **`mode`** is the key lever for advisory use:
+> - `sales` — recommend products, redirect OOS back to shopping (current behaviour)
+> - `advisory` — help-first; no commercial redirect in OOS responses; products are
+>   offered as a recommendation, not the goal of every response
+
+**Constraints imposed on build:**
+> - New file `pipeline/persona.py` defines `PersonaConfig` and ships built-in presets.
+> - `build_graph()` in `pipeline/graph.py` gains a `persona: PersonaConfig` parameter.
+> - `synthesizer.py` and `graph.py` replace all hardcoded brand/contact strings with
+>   `persona.brand`, `persona.support_url`, etc.
+> - `_SUPPORT_RESPONSE` becomes a prompt template rendered from `PersonaConfig` fields.
+> - In `advisory` mode, the OOS benign prompt omits the gear-redirect sentence.
+> - The optimizer must not tune persona prompts — those are operator config, not eval-driven parameters.

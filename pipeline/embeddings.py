@@ -12,6 +12,7 @@ To swap embedding models:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -154,7 +155,6 @@ def default_provider() -> FastEmbedProvider:
     Returns the default embedding provider using env-configured model names.
     Used by the retriever at query time and by embed_catalog.py at index time.
     """
-    import os
     return FastEmbedProvider(
         dense_model=os.getenv("DENSE_MODEL", "BAAI/bge-small-en-v1.5"),
         sparse_model=os.getenv("SPARSE_MODEL", "prithivida/Splade_PP_en_v1"),

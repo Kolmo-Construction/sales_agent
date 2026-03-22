@@ -49,16 +49,23 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     -- a migration here — old rows remain queryable via ->>'field' operators.
     intent               TEXT,                  -- product_search | general_education | support_request | out_of_scope
     oos_sub_class        TEXT,                  -- social | benign | inappropriate (OOS turns only)
+    oos_complexity       TEXT,                  -- simple | complex (OOS turns only) — drives model selection
+    model_used           TEXT,                  -- which model handled synthesis (derived from oos_complexity + intent)
     extracted_context    JSONB,                 -- ExtractedContext fields
     translated_specs     JSONB,                 -- ProductSpecs fields
     retrieved_product_ids TEXT[],               -- product IDs returned by retriever
     response             TEXT,                  -- final assistant response text
     disclaimers_applied  TEXT[],                -- safety disclaimer keys injected
     messages             JSONB,                 -- full conversation history up to this turn
+    response_latency_ms  INT,                   -- wall-clock ms for agent_invoke() — UX signal
+
+    -- Round tracking — set FEEDBACK_ROUND env var to label testing sessions
+    -- Allows multi-round analysis without dropping the database between rounds
+    round_label          TEXT,                  -- e.g. "2026-03-20" or "round-2"
 
     -- Feedback
     thumbs               SMALLINT,              -- 1 (up) | -1 (down) | NULL (not yet rated)
-    failure_stage        TEXT,                  -- intent | extraction | retrieval | synthesis | none
+    failure_stage        TEXT,                  -- intent | extraction | translation | retrieval | synthesis | none
     correction           TEXT,                  -- free-text: "the right answer would have been..."
     overall_rating       SMALLINT,              -- 1–5, set only on the final turn of a session
 
@@ -71,7 +78,7 @@ CREATE TABLE IF NOT EXISTS feedback_events (
         CHECK (thumbs IS NULL OR thumbs IN (-1, 1)),
     CONSTRAINT feedback_events_failure_stage_values
         CHECK (failure_stage IS NULL OR failure_stage IN
-               ('intent', 'extraction', 'retrieval', 'synthesis', 'none')),
+               ('intent', 'extraction', 'translation', 'retrieval', 'synthesis', 'none')),
     CONSTRAINT feedback_events_overall_rating_range
         CHECK (overall_rating IS NULL OR (overall_rating BETWEEN 1 AND 5)),
     CONSTRAINT feedback_events_tester_role_values
@@ -90,6 +97,10 @@ CREATE INDEX IF NOT EXISTS feedback_events_unpromoted_down_idx
 -- Index: time-range queries (used by analyze_feedback.py --since flag)
 CREATE INDEX IF NOT EXISTS feedback_events_created_at_idx
     ON feedback_events (created_at);
+
+-- Index: round-scoped queries (used by analyze_feedback.py --round flag)
+CREATE INDEX IF NOT EXISTS feedback_events_round_label_idx
+    ON feedback_events (round_label);
 
 
 -- ---------------------------------------------------------------------------
@@ -116,3 +127,31 @@ CREATE TABLE IF NOT EXISTS feedback_product_ratings (
 -- Index: look up all ratings for an event (used by promote_feedback.py)
 CREATE INDEX IF NOT EXISTS feedback_product_ratings_event_idx
     ON feedback_product_ratings (feedback_event_id);
+
+
+-- ---------------------------------------------------------------------------
+-- Migration: columns and constraints added after initial schema release
+--
+-- Safe to run on existing databases. Uses ADD COLUMN IF NOT EXISTS and
+-- DROP/ADD CONSTRAINT to be idempotent.
+-- ---------------------------------------------------------------------------
+
+-- Fix 1: oos_complexity and model_used (debug model selection on OOS failures)
+ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS oos_complexity      TEXT;
+ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS model_used          TEXT;
+
+-- Fix 4: response_latency_ms (wall-clock UX signal)
+ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS response_latency_ms INT;
+
+-- Fix 6: round_label (multi-round analysis without dropping the database)
+ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS round_label         TEXT;
+CREATE INDEX IF NOT EXISTS feedback_events_round_label_idx
+    ON feedback_events (round_label);
+
+-- Fix 2: widen failure_stage CHECK to include 'translation'
+ALTER TABLE feedback_events
+    DROP CONSTRAINT IF EXISTS feedback_events_failure_stage_values;
+ALTER TABLE feedback_events
+    ADD CONSTRAINT feedback_events_failure_stage_values
+        CHECK (failure_stage IS NULL OR failure_stage IN
+               ('intent', 'extraction', 'translation', 'retrieval', 'synthesis', 'none'));

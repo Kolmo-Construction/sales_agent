@@ -4,15 +4,18 @@ feedback/store.py — PostgreSQL read/write for the feedback subsystem.
 All functions take a psycopg.Connection as their first argument.
 The caller is responsible for connection lifecycle (open, commit, close).
 
-In the Streamlit app the connection is held in a @st.cache_resource singleton.
-In CLI scripts it is opened once at the top of main() and closed on exit.
+In the Streamlit app connections come from a ConnectionPool singleton cached via
+@st.cache_resource. Use get_connection_pool() there — the pool handles reconnection
+automatically, preventing the stale-connection silent-drop problem.
+In CLI scripts use get_connection() directly — open once at top of main(), close on exit.
 
 Target database: sales_agent_feedback  (FEEDBACK_POSTGRES_DSN env var)
 Do NOT pass a connection to the production sales_agent database here.
 
 --- Function index ---
 
-  get_connection()                     open a connection from FEEDBACK_POSTGRES_DSN
+  get_connection()                     open a single connection from FEEDBACK_POSTGRES_DSN
+  get_connection_pool()                open a ConnectionPool (use in the Streamlit app)
   save_feedback_event(conn, event)     insert a new feedback_events row, return its id
   update_feedback(conn, id, **fields)  set thumbs / failure_stage / correction / overall_rating
   save_product_ratings(conn, id, ratings)  bulk-insert feedback_product_ratings rows
@@ -39,6 +42,40 @@ FEEDBACK_POSTGRES_DSN = os.getenv("FEEDBACK_POSTGRES_DSN", "")
 # ---------------------------------------------------------------------------
 # Connection factory
 # ---------------------------------------------------------------------------
+
+def get_connection_pool(min_size: int = 1, max_size: int = 5):
+    """
+    Open and return a psycopg ConnectionPool for the feedback database.
+
+    Use this in the Streamlit app (cached via @st.cache_resource). The pool
+    keeps connections alive and reconnects automatically — callers never hold
+    a stale connection.
+
+    Usage:
+        pool = get_connection_pool()
+        with pool.connection() as conn:
+            save_feedback_event(conn, event)
+
+    Raises RuntimeError if FEEDBACK_POSTGRES_DSN is not set.
+    Raises ImportError if psycopg-pool is not installed.
+    """
+    if not FEEDBACK_POSTGRES_DSN:
+        raise RuntimeError(
+            "FEEDBACK_POSTGRES_DSN is not set. "
+            "Add it to your .env file pointing at sales_agent_feedback."
+        )
+    try:
+        from psycopg_pool import ConnectionPool  # noqa: PLC0415
+    except ImportError as e:
+        raise ImportError("Run: pip install psycopg-pool>=3.1") from e
+
+    return ConnectionPool(
+        FEEDBACK_POSTGRES_DSN,
+        min_size=min_size,
+        max_size=max_size,
+        kwargs={"row_factory": dict_row},
+    )
+
 
 def get_connection() -> psycopg.Connection:
     """
@@ -80,8 +117,10 @@ def save_feedback_event(conn: psycopg.Connection, event: dict[str, Any]) -> int:
     event : dict
         Must contain:
           session_id, turn_index, tester_name, tester_role
-          intent, oos_sub_class, extracted_context, translated_specs,
-          retrieved_product_ids, response, disclaimers_applied, messages
+          intent, oos_sub_class, oos_complexity, model_used,
+          extracted_context, translated_specs,
+          retrieved_product_ids, response, disclaimers_applied, messages,
+          response_latency_ms, round_label
         All AgentState fields are optional — pass None if the stage did not run.
 
     Returns
@@ -94,31 +133,37 @@ def save_feedback_event(conn: psycopg.Connection, event: dict[str, Any]) -> int:
             """
             INSERT INTO feedback_events (
                 session_id, turn_index, tester_name, tester_role,
-                intent, oos_sub_class,
+                intent, oos_sub_class, oos_complexity, model_used,
                 extracted_context, translated_specs,
-                retrieved_product_ids, response, disclaimers_applied, messages
+                retrieved_product_ids, response, disclaimers_applied, messages,
+                response_latency_ms, round_label
             ) VALUES (
                 %(session_id)s, %(turn_index)s, %(tester_name)s, %(tester_role)s,
-                %(intent)s, %(oos_sub_class)s,
+                %(intent)s, %(oos_sub_class)s, %(oos_complexity)s, %(model_used)s,
                 %(extracted_context)s, %(translated_specs)s,
                 %(retrieved_product_ids)s, %(response)s,
-                %(disclaimers_applied)s, %(messages)s
+                %(disclaimers_applied)s, %(messages)s,
+                %(response_latency_ms)s, %(round_label)s
             )
             RETURNING id
             """,
             {
-                "session_id":           event.get("session_id"),
-                "turn_index":           event.get("turn_index"),
-                "tester_name":          event.get("tester_name"),
-                "tester_role":          event.get("tester_role"),
-                "intent":               event.get("intent"),
-                "oos_sub_class":        event.get("oos_sub_class"),
-                "extracted_context":    _as_jsonb(event.get("extracted_context")),
-                "translated_specs":     _as_jsonb(event.get("translated_specs")),
+                "session_id":            event.get("session_id"),
+                "turn_index":            event.get("turn_index"),
+                "tester_name":           event.get("tester_name"),
+                "tester_role":           event.get("tester_role"),
+                "intent":                event.get("intent"),
+                "oos_sub_class":         event.get("oos_sub_class"),
+                "oos_complexity":        event.get("oos_complexity"),
+                "model_used":            event.get("model_used"),
+                "extracted_context":     _as_jsonb(event.get("extracted_context")),
+                "translated_specs":      _as_jsonb(event.get("translated_specs")),
                 "retrieved_product_ids": event.get("retrieved_product_ids") or [],
-                "response":             event.get("response"),
-                "disclaimers_applied":  event.get("disclaimers_applied") or [],
-                "messages":             _as_jsonb(event.get("messages")),
+                "response":              event.get("response"),
+                "disclaimers_applied":   event.get("disclaimers_applied") or [],
+                "messages":              _as_jsonb(event.get("messages")),
+                "response_latency_ms":   event.get("response_latency_ms"),
+                "round_label":           event.get("round_label"),
             },
         )
         row = cur.fetchone()
@@ -249,6 +294,7 @@ def list_thumbs_down(
     failure_stage: Optional[str] = None,
     since: Optional[str] = None,
     role: Optional[str] = None,
+    round_label: Optional[str] = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
     """
@@ -260,11 +306,14 @@ def list_thumbs_down(
         False (default) returns only unpromoted events — the normal workflow.
         True returns already-promoted events (for audit / re-review).
     failure_stage : str | None
-        Filter to a specific failure stage (intent | extraction | retrieval | synthesis | none).
+        Filter to a specific failure stage
+        (intent | extraction | translation | retrieval | synthesis | none).
     since : str | None
         ISO date string (e.g. "2026-03-01") — only return events created on or after this date.
     role : str | None
         Filter by tester role.
+    round_label : str | None
+        Filter to a specific testing round (e.g. "2026-03-20" or "round-2").
     limit : int
         Maximum rows to return (default 200).
 
@@ -286,6 +335,9 @@ def list_thumbs_down(
     if role is not None:
         conditions.append("e.tester_role = %(role)s")
         params["role"] = role
+    if round_label is not None:
+        conditions.append("e.round_label = %(round_label)s")
+        params["round_label"] = round_label
 
     where = " AND ".join(conditions)
 
@@ -328,6 +380,7 @@ def get_stats(
     conn: psycopg.Connection,
     *,
     since: Optional[str] = None,
+    round_label: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Return aggregate counts used by analyze_feedback.py.
@@ -339,8 +392,15 @@ def get_stats(
       by_role      (list of {tester_role, down_count, total, down_rate})
       by_stage     (list of {failure_stage, count})
     """
-    date_filter = "AND created_at >= %(since)s" if since else ""
-    params: dict[str, Any] = {"since": since} if since else {}
+    filters = []
+    params: dict[str, Any] = {}
+    if since:
+        filters.append("AND created_at >= %(since)s")
+        params["since"] = since
+    if round_label:
+        filters.append("AND round_label = %(round_label)s")
+        params["round_label"] = round_label
+    date_filter = " ".join(filters)
 
     with conn.cursor() as cur:
         cur.execute(

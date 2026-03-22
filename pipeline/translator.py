@@ -218,9 +218,6 @@ def _build_search_query(
     if specs.insulation_type:
         parts.append(f"{specs.insulation_type} insulation")
 
-    if context.budget_usd:
-        parts.append(f"budget under ${context.budget_usd:.0f}")
-
     if required_categories:
         cat_str = " ".join(required_categories)
         parts.append(f"gear: {cat_str}")

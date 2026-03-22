@@ -541,7 +541,7 @@ def _log_generation(
     )
 
 
-def default_provider() -> OllamaProvider | OutlinesProvider | AnthropicProvider:
+def default_provider() -> LLMProvider:
     """
     LLM_PROVIDER=ollama    → OllamaProvider    (default — CFG via Ollama GBNF)
     LLM_PROVIDER=outlines  → OutlinesProvider  (CFG via Outlines EBNF, needs gguf path)

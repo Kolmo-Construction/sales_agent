@@ -17,6 +17,7 @@ onnxruntime-gpu>=1.19.0             # GPU-accelerated ONNX inference (replaces o
 langgraph>=0.2.0
 langgraph-checkpoint-postgres>=1.0.0
 psycopg[binary]>=3.1                 # PostgreSQL driver for LangGraph checkpointer
+psycopg-pool>=3.1                    # connection pool for feedback UI (prevents stale-connection data loss)
 
 # Evaluation framework
 deepeval>=1.0.0                      # test harness, LLM-as-judge, CI gates

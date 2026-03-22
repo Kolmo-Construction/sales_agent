@@ -122,12 +122,15 @@ def route_after_classify(
     """
     Conditional edge — runs after classify_and_extract.
 
+    Routing is driven by primary_intent only. secondary_intent flows to the
+    synthesizer as context but does not affect which graph path is taken.
+
     Routes to:
-      synthesize      — non-product-search intents (education, support, oos)
-      ask_followup    — product_search but required context fields are missing
-      translate_specs — product_search with enough context to proceed
+      synthesize      — non-product-search primary intents (education, support, oos)
+      ask_followup    — product_search primary but required context fields are missing
+      translate_specs — product_search primary with enough context to proceed
     """
-    intent = state.get("intent")
+    intent = state.get("primary_intent")
 
     if intent != "product_search":
         return "synthesize"

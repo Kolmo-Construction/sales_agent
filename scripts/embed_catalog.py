@@ -41,9 +41,23 @@ BATCH_SIZE = 512  # Products per embedding + upsert batch. GPU can handle large 
 
 def get_qdrant_client():
     from qdrant_client import QdrantClient
-    url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    api_key = os.getenv("QDRANT_API_KEY") or None  # empty string → None for local dev
-    return QdrantClient(url=url, api_key=api_key, timeout=60)
+
+    url     = os.getenv("QDRANT_URL", "http://localhost:6333")
+    api_key = os.getenv("QDRANT_API_KEY") or None
+
+    is_cloud = url and not any(h in url for h in ("localhost", "127.0.0.1"))
+    if is_cloud:
+        try:
+            client = QdrantClient(url=url, api_key=api_key, timeout=60)
+            client.get_collections()   # lightweight probe
+            print(f"  Connected to cloud Qdrant: {url}")
+            return client
+        except Exception as exc:
+            print(f"  Cloud Qdrant unavailable ({exc}), falling back to local.")
+
+    local_url = "http://localhost:6333"
+    print(f"  Connected to local Qdrant: {local_url}")
+    return QdrantClient(url=local_url, api_key=None, timeout=60)
 
 
 def create_collection(client, dense_dimensions: int) -> None:

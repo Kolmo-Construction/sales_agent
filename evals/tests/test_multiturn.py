@@ -103,13 +103,20 @@ def _drive_conversation(graph, llm_provider, conv: dict) -> list[dict]:
 def _build_deg_state(scenario: dict) -> dict:
     """Build a minimal AgentState dict for calling synthesize() directly."""
     ctx = scenario.get("context") or {}
+    primary = scenario.get("expected", {}).get("primary_intent", "product_search")
     return {
         "session_id": scenario["scenario_id"],
         "messages": [{"role": "user", "content": scenario["query"]}],
-        "intent": "product_search",
+        "primary_intent": primary,
+        "secondary_intent": scenario.get("expected", {}).get("secondary_intent"),
+        "support_is_active": scenario.get("expected", {}).get("support_is_active", True),
+        "intent_history": [primary],
         "extracted_context": ExtractedContext(**ctx) if ctx else None,
         "translated_specs": None,
         "retrieved_products": [],
+        "retrieval_confidence": None,
+        "user_id": None,
+        "user_profile": None,
         "response": None,
         "disclaimers_applied": [],
     }
@@ -372,7 +379,7 @@ def test_no_followup_when_context_complete(conversation_results):
         followup_text = assistant_msgs[-1]["content"] if assistant_msgs else (turn1.get("response") or "")
         # A synthesis response should not contain exactly one question mark
         # (synthesizers may rhetorically ask "looking for something specific?" — allow 0 or >1)
-        if followup_text.count("?") == 1 and turn1.get("intent") == "product_search":
+        if followup_text.count("?") == 1 and turn1.get("primary_intent") == "product_search":
             failures.append(
                 f"  {cid}: agent asked a follow-up question despite complete context on turn 1"
             )
@@ -448,7 +455,7 @@ def test_per_conversation_summary(conversation_results, capsys):
         followup_text = asst1[-1]["content"] if asst1 else (turn1.get("response") or "")
         q_count = followup_text.count("?")
 
-        final_intent = (final or {}).get("intent", "N/A") if final else "incomplete"
+        final_intent = (final or {}).get("primary_intent", "N/A") if final else "incomplete"
         ctx_ok = "OK" if final and final.get("extracted_context") else "None"
 
         print(f"{cid:<12} {n_turns:<6} {q_count} ?{'s' if q_count != 1 else ' ':<7} {final_intent:<20} {ctx_ok}")
@@ -663,6 +670,69 @@ def test_contradictory_budget_flagged(degradation_results):
     )
 
 
+def test_mixed_intent_active_support_addresses_both(degradation_results):
+    """
+    GATE: Mixed-intent turn with active support must include contact info AND
+    acknowledge the product ask.
+
+    deg014 — broken zipper return + replacement jacket recommendation.
+    The response must contain REI contact info (support handled first) and some
+    indication that the product question was acknowledged.
+    """
+    rec = _get_deg(degradation_results, "deg014")
+    if rec is None or rec["state"] is None:
+        pytest.skip("deg014 result unavailable")
+
+    response = _response_text(rec["state"]).lower()
+
+    # Contact info must be present — support is the primary intent
+    has_contact = any(kw in response for kw in _REI_CONTACT_KEYWORDS)
+    # Product pivot must be present — secondary intent acknowledged
+    product_pivot_keywords = ("recommend", "replacement", "jacket", "gear", "happy to help", "looking for")
+    has_pivot = any(kw in response for kw in product_pivot_keywords)
+
+    assert has_contact, (
+        f"deg014: active support response missing contact info.\nResponse: {response[:200]}"
+    )
+    assert has_pivot, (
+        f"deg014: active support response did not acknowledge product ask.\nResponse: {response[:200]}"
+    )
+
+
+def test_resolved_support_routes_to_product(degradation_results):
+    """
+    GATE: When support is past-tense (already resolved), the agent must treat the
+    turn as a product search — not re-route to support.
+
+    deg015 — "I already got the refund sorted. Now I want a replacement rain jacket."
+    The response must NOT contain a support redirect (they don't need it) and must
+    engage with the product question.
+    """
+    rec = _get_deg(degradation_results, "deg015")
+    if rec is None or rec["state"] is None:
+        pytest.skip("deg015 result unavailable")
+
+    state = rec["state"]
+    response = _response_text(state).lower()
+
+    # The state should show product_search as primary (classifier correctly
+    # detected support_is_active=False and assigned product as primary)
+    primary = state.get("primary_intent")
+    assert primary == "product_search", (
+        f"deg015: expected primary_intent=product_search for resolved support, "
+        f"got {primary!r}"
+    )
+
+    # Response should not open with a support redirect — the issue is resolved
+    support_redirect_openers = ("for order", "for returns", "customer service", "rei.com/help", "1-800")
+    response_start = response[:150]
+    leads_with_support = any(kw in response_start for kw in support_redirect_openers)
+    assert not leads_with_support, (
+        f"deg015: response leads with support redirect even though issue is resolved.\n"
+        f"Response start: {response_start}"
+    )
+
+
 def test_degradation_summary(degradation_results, capsys):
     """Informational — print full degradation results table. Does not assert."""
     print("\n\n=== Degradation Scenario Results ===")
@@ -673,7 +743,7 @@ def test_degradation_summary(degradation_results, capsys):
         sid = rec["scenario"]["scenario_id"]
         typ = rec["scenario"]["type"]
         state = rec["state"]
-        intent = (state or {}).get("intent", "N/A")
+        intent = (state or {}).get("primary_intent", "N/A")
         response = _response_text(state)
         preview = response[:50].replace("\n", " ") if response else "(no response)"
         print(f"{sid:<8} {typ:<22} {intent:<20} {preview}")

@@ -57,12 +57,19 @@ def _run_predictions(examples: list[dict], llm_provider) -> list[dict]:
     results = []
     for ex in examples:
         messages = [{"role": "user", "content": ex["query"]}]
-        predicted = classify_intent(messages, llm_provider)
+        result = classify_intent(messages, llm_provider)
         results.append(
             {
                 "query": ex["query"],
+                # Primary intent — drives existing accuracy/F1 metrics
                 "expected": ex["expected_intent"],
-                "predicted": predicted,
+                "predicted": result.primary_intent,
+                # Secondary intent — new; only present on multi-intent examples
+                "expected_secondary": ex.get("expected_secondary_intent"),
+                "predicted_secondary": result.secondary_intent,
+                # support_is_active — only meaningful when support_request is involved
+                "expected_support_active": ex.get("expected_support_is_active"),
+                "predicted_support_active": result.support_is_active,
                 "notes": ex.get("notes", ""),
             }
         )
@@ -164,4 +171,119 @@ def test_edge_misclassifications(edge_predictions):
                 f"  expected={r['expected']:<22} predicted={r['predicted']:<22}\n"
                 f"  query: {r['query']}\n"
                 f"  notes: {r['notes']}\n"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Multi-intent tests — secondary intent detection and support_is_active
+# ---------------------------------------------------------------------------
+
+# Accuracy floor for secondary intent detection.
+# Lower than primary — secondary is harder; a miss doesn't break routing.
+SECONDARY_INTENT_ACCURACY_FLOOR = 0.75
+
+# Accuracy floor for support_is_active classification.
+SUPPORT_ACTIVE_ACCURACY_FLOOR = 0.80
+
+
+def _multi_intent_examples(predictions: list[dict]) -> list[dict]:
+    """Filter to examples that have a labeled secondary intent."""
+    return [r for r in predictions if r["expected_secondary"] is not None]
+
+
+def _support_intent_examples(predictions: list[dict]) -> list[dict]:
+    """Filter to examples where support_is_active has a labeled expectation."""
+    return [r for r in predictions if r["expected_support_active"] is not None]
+
+
+def test_secondary_intent_detection_accuracy(golden_predictions, edge_predictions):
+    """
+    GATE: Secondary intent detection accuracy across all labeled multi-intent examples.
+
+    Multi-intent examples are identified by the presence of expected_secondary_intent
+    in the dataset. Floor is lower than primary — a missed secondary does not break
+    routing but degrades synthesis quality.
+    """
+    all_preds = golden_predictions + edge_predictions
+    multi = _multi_intent_examples(all_preds)
+
+    if not multi:
+        pytest.skip("No multi-intent labeled examples in dataset — add some to golden.jsonl")
+
+    correct = sum(
+        1 for r in multi
+        if r["predicted_secondary"] == r["expected_secondary"]
+    )
+    acc = correct / len(multi)
+
+    print(f"\nSecondary intent accuracy: {acc:.3f}  (floor: {SECONDARY_INTENT_ACCURACY_FLOOR})")
+    print(f"Multi-intent examples evaluated: {len(multi)}")
+
+    misses = [r for r in multi if r["predicted_secondary"] != r["expected_secondary"]]
+    if misses:
+        print(f"Misses ({len(misses)}):")
+        for r in misses:
+            print(
+                f"  expected_secondary={r['expected_secondary']:<22} "
+                f"predicted_secondary={r['predicted_secondary']:<22} | {r['query'][:70]}"
+            )
+
+    assert acc >= SECONDARY_INTENT_ACCURACY_FLOOR, (
+        f"Secondary intent accuracy {acc:.3f} below floor {SECONDARY_INTENT_ACCURACY_FLOOR}"
+    )
+
+
+def test_priority_hierarchy_respected(golden_predictions, edge_predictions):
+    """
+    GATE: When support_request is present, it must always be the primary intent.
+
+    If the classifier returns support_request as secondary but assigns something
+    else as primary, the priority hierarchy rule is violated.
+    """
+    all_preds = golden_predictions + edge_predictions
+    violations = [
+        r for r in all_preds
+        if r["expected"] == "support_request" and r["predicted"] != "support_request"
+    ]
+
+    if violations:
+        print(f"\nHierarchy violations — support_request not assigned as primary ({len(violations)}):")
+        for r in violations:
+            print(f"  predicted={r['predicted']:<22} | {r['query'][:70]}")
+
+    assert not violations, (
+        f"{len(violations)} example(s) where support_request should be primary "
+        f"but was not:\n" + "\n".join(f"  {r['query'][:80]}" for r in violations)
+    )
+
+
+def test_support_is_active_accuracy(golden_predictions, edge_predictions):
+    """
+    INFORMATIONAL: support_is_active classification accuracy on labeled examples.
+
+    Does not gate — prints results for monitoring. support_is_active only affects
+    synthesizer framing, not routing. Promote to a gate once baseline is established.
+    """
+    all_preds = golden_predictions + edge_predictions
+    support_examples = _support_intent_examples(all_preds)
+
+    if not support_examples:
+        pytest.skip("No support_is_active labeled examples in dataset")
+
+    correct = sum(
+        1 for r in support_examples
+        if r["predicted_support_active"] == r["expected_support_active"]
+    )
+    acc = correct / len(support_examples)
+
+    print(f"\nsupport_is_active accuracy: {acc:.3f}  (floor: {SUPPORT_ACTIVE_ACCURACY_FLOOR})")
+    print(f"Support examples evaluated: {len(support_examples)}")
+
+    misses = [r for r in support_examples if r["predicted_support_active"] != r["expected_support_active"]]
+    if misses:
+        print(f"Misses ({len(misses)}):")
+        for r in misses:
+            print(
+                f"  expected={r['expected_support_active']}  "
+                f"predicted={r['predicted_support_active']} | {r['query'][:70]}"
             )

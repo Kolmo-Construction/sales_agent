@@ -32,6 +32,10 @@ manual / extended eval runs only.
                   Writes the query + extracted_context snapshot. Reviewer
                   should edit expected fields in the JSONL afterward.
 
+  translation → evals/datasets/translation/staging.jsonl   (no golden equivalent)
+                  Writes the query + extracted_context + actual translated_specs
+                  (what the translator produced). Reviewer fills in expected_specs.
+
   retrieval   → evals/datasets/retrieval/queries.jsonl
                   + evals/datasets/retrieval/relevance_labels.jsonl
                   These files have no golden equivalent — all retrieval
@@ -78,12 +82,13 @@ _DATASETS = _REPO / "evals" / "datasets"
 _TARGET: dict[str, Path] = {
     # Feedback writes to staging files — NOT golden sets.
     # Golden sets are curated by hand and CI-gated; staging grows freely.
-    "intent":     _DATASETS / "intent"     / "staging.jsonl",
-    "extraction": _DATASETS / "extraction" / "staging.jsonl",
-    "retrieval_queries": _DATASETS / "retrieval" / "queries.jsonl",
-    "retrieval_labels":  _DATASETS / "retrieval" / "relevance_labels.jsonl",
-    "synthesis":  _DATASETS / "synthesis"  / "staging.jsonl",
-    "multiturn":  _DATASETS / "multiturn"  / "staging.jsonl",
+    "intent":            _DATASETS / "intent"      / "staging.jsonl",
+    "extraction":        _DATASETS / "extraction"  / "staging.jsonl",
+    "translation":       _DATASETS / "translation" / "staging.jsonl",
+    "retrieval_queries": _DATASETS / "retrieval"   / "queries.jsonl",
+    "retrieval_labels":  _DATASETS / "retrieval"   / "relevance_labels.jsonl",
+    "synthesis":         _DATASETS / "synthesis"   / "staging.jsonl",
+    "multiturn":         _DATASETS / "multiturn"   / "staging.jsonl",
 }
 
 _INTENT_CHOICES = [
@@ -106,7 +111,7 @@ def _parse_args() -> argparse.Namespace:
         "--stage",
         metavar="STAGE",
         default=None,
-        choices=["intent", "extraction", "retrieval", "synthesis", "none"],
+        choices=["intent", "extraction", "translation", "retrieval", "synthesis", "none"],
         help="Only process events attributed to this failure stage",
     )
     p.add_argument(
@@ -114,6 +119,22 @@ def _parse_args() -> argparse.Namespace:
         metavar="DATE",
         default=None,
         help="Only process events created on or after this ISO date",
+    )
+    p.add_argument(
+        "--round",
+        metavar="LABEL",
+        default=None,
+        help="Only process events from a specific testing round (e.g. 2026-03-20)",
+    )
+    p.add_argument(
+        "--auto",
+        action="store_true",
+        help=(
+            "Auto-promote high-confidence failures without prompting. "
+            "An event qualifies when all three hold: failure_stage is annotated "
+            "(not 'none'), correction text is provided, and all product ratings are 0. "
+            "Events that do not qualify are shown interactively as normal."
+        ),
     )
     return p.parse_args()
 
@@ -354,6 +375,54 @@ def _promote_retrieval(ev: dict) -> bool:
     return True
 
 
+def _promote_translation(ev: dict) -> bool:
+    """
+    Write query + extracted_context + actual translated_specs to
+    evals/datasets/translation/staging.jsonl.
+
+    The 'actual_specs' field is what the translator produced (may be wrong).
+    The reviewer should fill in 'expected_specs' with the correct ProductSpecs.
+    """
+    query = _extract_last_user_message(ev)
+    if not query:
+        print("  Could not extract user message — skipped.")
+        return False
+
+    ec = ev.get("extracted_context") or {}
+    if isinstance(ec, str):
+        try:
+            ec = json.loads(ec)
+        except Exception:
+            ec = {}
+
+    ts = ev.get("translated_specs") or {}
+    if isinstance(ts, str):
+        try:
+            ts = json.loads(ts)
+        except Exception:
+            ts = {}
+
+    correction = ev.get("correction") or ""
+    notes = (
+        f"TODO: fill in expected_specs with the correct ProductSpecs for this query. "
+        f"actual_specs is what the translator produced. "
+        f"Promoted from feedback id={ev['id']}. "
+        + (f"Tester note: {correction}" if correction else "")
+    ).strip()
+
+    record = {
+        "query":            query,
+        "extracted_context": ec,
+        "actual_specs":     ts,    # what the translator produced (may be wrong)
+        "expected_specs":   {},    # TODO: fill in correct ProductSpecs
+        "notes":            notes,
+    }
+    _append_jsonl(_TARGET["translation"], record)
+    print(f"  → Written to {_TARGET['translation'].relative_to(_REPO)}")
+    print("  NOTE: 'expected_specs' is empty — edit the JSONL entry to add correct values.")
+    return True
+
+
 def _promote_synthesis(ev: dict) -> bool:
     """Write query + context + product IDs + correction to synthesis/golden.jsonl."""
     query = _extract_last_user_message(ev)
@@ -457,6 +526,8 @@ def _promote(ev: dict) -> bool:
         return _promote_intent(ev)
     elif stage == "extraction":
         return _promote_extraction(ev)
+    elif stage == "translation":
+        return _promote_translation(ev)
     elif stage == "retrieval":
         return _promote_retrieval(ev)
     elif stage == "synthesis":
@@ -464,6 +535,26 @@ def _promote(ev: dict) -> bool:
     else:
         # none / NULL / anything unrecognised
         return _promote_multiturn(ev)
+
+
+def _is_high_confidence(ev: dict) -> bool:
+    """
+    Return True when an event has enough signal to promote without human review.
+
+    All three must hold:
+      1. failure_stage is annotated and is not 'none' (tester identified the stage)
+      2. correction text is provided (tester described the expected behaviour)
+      3. All product ratings are 0 / not-relevant (tester confirmed all shown products wrong)
+    """
+    stage = ev.get("failure_stage")
+    correction = (ev.get("correction") or "").strip()
+    ratings = ev.get("product_ratings") or []
+
+    has_stage = stage is not None and stage != "none"
+    has_correction = len(correction) > 0
+    all_zero = bool(ratings) and all(r["relevance"] == 0 for r in ratings)
+
+    return has_stage and has_correction and all_zero
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +599,7 @@ def main() -> None:
         promoted=False,
         failure_stage=args.stage,
         since=args.since,
+        round_label=args.round,
     )
 
     if not events:
@@ -516,6 +608,8 @@ def main() -> None:
             filter_desc.append(f"stage={args.stage}")
         if args.since:
             filter_desc.append(f"since={args.since}")
+        if args.round:
+            filter_desc.append(f"round={args.round}")
         suffix = f" ({', '.join(filter_desc)})" if filter_desc else ""
         print(f"No unpromoted thumbs-down events{suffix}. Nothing to do.")
         conn.close()
@@ -523,22 +617,42 @@ def main() -> None:
 
     total = len(events)
     print(f"\nFound {total} unpromoted thumbs-down event(s).")
+    if args.auto:
+        hc = sum(1 for ev in events if _is_high_confidence(ev))
+        print(f"--auto mode: {hc} high-confidence event(s) will be promoted without prompting.")
     print("Controls: [y] promote  [n/s] skip  [q] quit\n")
 
     promoted_count = 0
     skipped_count  = 0
 
+    _TARGET_DESC = {
+        "intent":      "evals/datasets/intent/staging.jsonl",
+        "extraction":  "evals/datasets/extraction/staging.jsonl",
+        "translation": "evals/datasets/translation/staging.jsonl",
+        "retrieval":   "evals/datasets/retrieval/queries.jsonl + relevance_labels.jsonl",
+        "synthesis":   "evals/datasets/synthesis/staging.jsonl",
+        "none":        "evals/datasets/multiturn/staging.jsonl",
+    }
+
     for i, ev in enumerate(events, 1):
         _print_event(i, total, ev)
 
-        stage = ev.get("failure_stage") or "none/not annotated"
-        target_desc = {
-            "intent":     "evals/datasets/intent/staging.jsonl",
-            "extraction": "evals/datasets/extraction/staging.jsonl",
-            "retrieval":  "evals/datasets/retrieval/queries.jsonl + relevance_labels.jsonl",
-            "synthesis":  "evals/datasets/synthesis/staging.jsonl",
-            "none":       "evals/datasets/multiturn/staging.jsonl",
-        }.get(ev.get("failure_stage") or "none", "evals/datasets/multiturn/staging.jsonl")
+        # --auto: skip the prompt for high-confidence events
+        if args.auto and _is_high_confidence(ev):
+            stage = ev.get("failure_stage") or "none"
+            target_desc = _TARGET_DESC.get(stage, "evals/datasets/multiturn/staging.jsonl")
+            print(f"  [auto] High-confidence failure → {target_desc}")
+            success = _promote(ev)
+            if success:
+                mark_promoted(conn, ev["id"])
+                promoted_count += 1
+                print(f"  Marked as promoted.\n")
+            else:
+                skipped_count += 1
+            continue
+
+        stage = ev.get("failure_stage") or "none"
+        target_desc = _TARGET_DESC.get(stage, "evals/datasets/multiturn/staging.jsonl")
 
         answer = _prompt(f"Promote to {target_desc}?", ["y", "n", "q"])
 
