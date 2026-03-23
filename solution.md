@@ -592,6 +592,12 @@ Build the eval framework in this order — each step unblocks the next and gives
 > ✅ evals/ framework — Step 5 complete: synthesis LLM judge infrastructure + eval (14 golden scenarios; judges: relevance, persona, faithfulness; rubrics in evals/judges/rubrics/; thresholds: mean relevance/persona ≥ 3.5, hallucination ≤ 10%, grounding ≥ 20%; runner: scripts/run_evals.sh; config: evals/config.py)
 > ✅ evals/ framework — Step 6 complete: multi-turn coherence + degradation eval (8 conversation scenarios, 11 degradation scenarios; metrics: evals/metrics/multiturn.py; coherence LLM judge: evals/judges/rubrics/coherence.md + build_coherence_prompt(); conftest: session-scoped embedding_provider + eval_graph; test_multiturn.py: 10 tests; thresholds in evals/config.py; requires_qdrant marker registered in pytest.ini)
 
+0. **Safety pre-filter (`pipeline/guard.py`)** — wire Llama Guard 3 into `agent.py` before
+   `graph.invoke()`. Confirm `llama-guard3:latest` is pulled (`ollama pull llama-guard3`).
+   No eval required — guard correctness is covered by the existing `test_safety.py` gate
+   (inappropriate OOS path) and manual smoke-test with a jailbreak prompt.
+   Build this before the eval steps so CI has the full production path from day one.
+
 1. **Intent classification eval** — deterministic, no LLM calls, zero infrastructure needed beyond a labeled JSONL file and sklearn. Gives immediate signal on the most upstream stage.
 
 2. **Context extraction eval** — same pattern as classification. Together steps 1–2 validate the input understanding layer.
@@ -606,7 +612,7 @@ Build the eval framework in this order — each step unblocks the next and gives
 
 6. **Multi-turn + degradation eval** — `evals/metrics/multiturn.py` (9 deterministic functions: single_followup_check, repeated_question_check, context_fields_present, oos_deflection_check, oos_inappropriate_check, oos_social_check, oos_benign_check, zero_result_check, contradictory_flag) + `evals/judges/rubrics/coherence.md` + `build_coherence_prompt()` in prompts.py + `evals/tests/test_multiturn.py` (10 tests). Datasets: `evals/datasets/multiturn/conversations.jsonl` (8 conversations) + `degradation.jsonl` (13 scenarios — includes deg012 social and deg013 inappropriate hard-reject). Infrastructure: session-scoped `embedding_provider` + `eval_graph` in conftest.py; `requires_qdrant` marker for Qdrant-dependent tests. Zero-result tests call `synthesize()` directly — no Qdrant needed. Coherence judge scores full conversation transcript (1–5), threshold ≥ 3.5.
 
-7. **CI wiring** — `.github/workflows/evals.yml`: two jobs — `safety-gate` (every PR, ~10 min, no Qdrant) and `full-suite` (push to master only, ~60 min, Qdrant Cloud via secrets). Ollama + models installed in runner. Reports archived as GitHub Actions artifacts. Secrets required: `QDRANT_URL`, `QDRANT_API_KEY`.
+7. **CI wiring** — `.github/workflows/evals.yml`: two jobs — `safety-gate` (every PR, ~10 min, no Qdrant) and `full-suite` (push to master only, ~60 min, Qdrant Cloud via secrets). Ollama + models installed in runner: `gemma2:9b`, `llama3.2`, and `llama-guard3` must all be pulled. Reports archived as GitHub Actions artifacts. Secrets required: `QDRANT_URL`, `QDRANT_API_KEY`.
 
 **Stage 3 — Autonomous Optimizer** (see `optimizer.md` for full specification)
 
