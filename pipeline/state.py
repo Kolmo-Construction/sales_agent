@@ -188,12 +188,22 @@ class AgentState(TypedDict):
     #               Synthesizer uses this as the proactive follow-up trigger.
     # None when secondary_intent is None.
 
-    support_is_active: bool
+    support_status: str
     # Output of Node 1. Only meaningful when support_request is one of the intents.
-    # True  — support issue is open/active ("I need to return this").
-    #         Synthesizer addresses support first, then pivots to secondary intent.
-    # False — support issue is past-tense/resolved ("I already returned it").
-    #         Synthesizer briefly acknowledges, then focuses on secondary intent.
+    # "active"    — support issue is open/unresolved ("I need to return this").
+    #               Synthesizer addresses support first, then pivots to secondary intent.
+    # "resolved"  — support issue is past-tense/resolved ("I already returned it").
+    #               Synthesizer briefly acknowledges, then focuses on secondary intent.
+    # "abandoned" — customer explicitly dropped the support issue.
+    #               Synthesizer ignores the support issue entirely.
+    # "escalated" — customer explicitly rejected phone/online support; wants in-person help.
+    #               Synthesizer offers store locator, skips phone/URL.
+
+    support_handled: bool
+    # Set to True by synthesize() the first time it responds to a support_request turn.
+    # Sticky — never reset within a session. Prevents the synthesizer from repeating the
+    # same phone/URL redirect on every subsequent turn where the user is still in
+    # support_request primary intent.
 
     intent_history: Annotated[list[str], _append_intents]
     # Accumulates primary_intent each turn (append reducer).
@@ -269,7 +279,8 @@ def initial_state(session_id: str, user_message: str) -> AgentState:
         primary_intent=None,
         secondary_intent=None,
         secondary_intent_type=None,
-        support_is_active=True,
+        support_status="active",
+        support_handled=False,
         intent_history=[],
         extracted_context=None,
         oos_sub_class=None,

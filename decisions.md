@@ -179,7 +179,7 @@ multi-intent turns be handled?
   more complex, higher latency, requires merging responses
 
 **Answer:**
-> **Multi-intent schema: `primary_intent` + `secondary_intent` + `support_is_active`, with
+> **Multi-intent schema: `primary_intent` + `secondary_intent` + `support_status`, with
 > a fixed priority hierarchy determining which intent is primary.**
 >
 > **Priority hierarchy (high → low):**
@@ -203,11 +203,16 @@ multi-intent turns be handled?
 > insulation work?") lets the user evaluate the recommendation that follows. Reversing
 > this gives them a recommendation they cannot yet assess.
 >
-> **`support_is_active: bool`** — distinguishes active from past-tense support issues.
-> "I need to return this" → `support_is_active=True` (handle support first).
-> "I already returned it — now I want a replacement" → `support_is_active=False`
-> (support is resolved; treat product_search as effective primary). When False, the
-> synthesizer briefly acknowledges the past issue and focuses on the product response.
+> **`support_status: Literal["active", "resolved", "abandoned", "escalated"]`** — four-way status for support issues.
+> - `"active"` — issue is current and unresolved → synthesizer directs to customer service (phone/URL) first.
+> - `"resolved"` — issue is past-tense → synthesizer briefly acknowledges and moves on.
+> - `"abandoned"` — customer explicitly dropped the issue → synthesizer ignores it entirely.
+> - `"escalated"` — customer explicitly rejected phone/online support, wants in-person → synthesizer offers store locator, never repeats phone/URL.
+>
+> **`support_handled: bool`** (AgentState) — sticky flag set to `True` by `synthesize()` the first time it responds
+> to a `support_request` turn. Prevents repeating the identical phone/URL redirect on every subsequent turn.
+> When `support_handled=True` and `support_status="active"`, the synthesizer shows the in-store alternative
+> instead of re-issuing the same contact block.
 >
 > `intent_history: list[str]` is added to `AgentState` with an append reducer. Every turn
 > appends `primary_intent`. The synthesizer reads `intent_history` to acknowledge natural
@@ -216,7 +221,11 @@ multi-intent turns be handled?
 
 **Constraints imposed on build:**
 > - `IntentResult` schema in `pipeline/intent.py` gains `secondary_intent: Optional[Literal[...]]`,
->   `secondary_intent_type: Optional[Literal["compound", "ambiguous"]]`, and `support_is_active: bool`.
+>   `secondary_intent_type: Optional[Literal["compound", "ambiguous"]]`, and `support_status: Literal["active", "resolved", "abandoned", "escalated"]`.
+> - `AgentState` gains `support_handled: bool` (default False, set sticky by synthesizer).
+> - `_build_system_prompt` suppresses the ambiguous secondary-intent pivot block when primary is
+>   `support_request` and support is active or escalated. Compound secondary blocks are still honored
+>   when support is merely active (user explicitly asked for both), but suppressed when escalated.
 > - `secondary_intent_type` disambiguates two previously conflated cases:
 >   - `"compound"` — customer explicitly asked for both intents; both must be fulfilled in the same response.
 >   - `"ambiguous"` — the message could plausibly be one intent or the other; the model is uncertain.
@@ -227,14 +236,14 @@ multi-intent turns be handled?
 > - `INTENT_SYSTEM_PROMPT` explains the compound/ambiguous distinction with examples for each.
 >   Few-shot examples include both compound and ambiguous cases.
 > - `AgentState` replaces `intent: str | None` with `primary_intent`, `secondary_intent`,
->   `secondary_intent_type`, `support_is_active`, and `intent_history` (append reducer).
+>   `secondary_intent_type`, `support_status`, and `intent_history` (append reducer).
 > - `route_after_classify` in `pipeline/graph.py` reads `primary_intent` — no other routing change.
 > - When `primary_intent=support_request` and `secondary_intent=product_search`, the product
 >   retrieval pipeline does **not** run (routing is based on primary only). The synthesizer
 >   handles support, then invites the user to follow up with the product question. Full
 >   dual-pipeline execution is a future enhancement.
 > - `synthesize` in `pipeline/synthesizer.py` receives both intents, `secondary_intent_type`,
->   `support_is_active`, and `intent_history`; `_build_system_prompt` assembles context-aware instructions.
+>   `support_status`, and `intent_history`; `_build_system_prompt` assembles context-aware instructions.
 >   When `secondary_intent_type == "ambiguous"`, the synthesizer appends a clarifying question.
 > - The support response (`_SUPPORT_RESPONSE`) becomes a prompt block rather than a
 >   hardcoded string, so the synthesizer can combine it with a product pivot when secondary

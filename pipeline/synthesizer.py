@@ -75,6 +75,7 @@ Customer context:
 # When PersonaConfig is implemented (D7), these move into the persona object.
 _SUPPORT_URL = "REI.com/help"
 _SUPPORT_PHONE = "1-800-426-4840"
+_SUPPORT_STORE_URL = "REI.com/stores"
 
 # Core persona prompt — optimizer tunes this (Class A parameter)
 SYSTEM_PROMPT = """\
@@ -121,6 +122,25 @@ _SECONDARY_INTENT_BLOCKS: dict[str, str] = {
         f"direct them to REI customer service at {_SUPPORT_URL} or {_SUPPORT_PHONE}."
     ),
 }
+
+# Injected when support_status == "escalated":
+# customer explicitly rejected phone/online path — offer store locator only.
+_SUPPORT_ESCALATED_BLOCK = (
+    f"\nNOTE: The customer has explicitly rejected the phone and online support path. "
+    f"They want to speak with someone in person. "
+    f"Acknowledge their frustration with genuine empathy — do NOT repeat the phone number or {_SUPPORT_URL}. "
+    f"Offer them the store locator at {_SUPPORT_STORE_URL} to find their nearest REI location "
+    f"where a team member can help them directly."
+)
+
+# Injected when support_status == "active" but support_handled == True:
+# the agent already gave the phone/URL once — don't repeat it verbatim.
+_SUPPORT_REPEAT_BLOCK = (
+    f"\nNOTE: The customer still has an active support issue. You have already directed them "
+    f"to {_SUPPORT_URL} and {_SUPPORT_PHONE}. Do NOT simply repeat that information. "
+    f"Instead: empathize with their situation, acknowledge that online/phone may not always feel "
+    f"satisfying, and offer the in-store option at {_SUPPORT_STORE_URL} as a concrete alternative."
+)
 
 # Injected when a prior support_request turn is detected in intent_history
 _INTENT_TRANSITION_BLOCK = (
@@ -336,7 +356,8 @@ def _build_system_prompt(
     confidence: str | None = None,
     secondary_intent: str | None = None,
     secondary_intent_type: str | None = None,
-    support_is_active: bool = True,
+    support_status: str = "active",
+    support_handled: bool = False,
     intent_history: list[str] | None = None,
     user_profile: str | None = None,
 ) -> str:
@@ -377,26 +398,44 @@ def _build_system_prompt(
             )
 
     elif intent == "support_request":
-        # For active support issues, tell the LLM how to frame the support redirect
-        if support_is_active:
+        # Tell the LLM how to frame the support situation based on its current status
+        if support_status == "escalated":
+            parts.append(_SUPPORT_ESCALATED_BLOCK)
+        elif support_status == "active" and support_handled:
+            # Already gave phone/URL on a prior turn — offer the in-store path instead
+            parts.append(_SUPPORT_REPEAT_BLOCK)
+        elif support_status == "active":
             parts.append(
                 f"\nNOTE: The customer has an active support or order issue. "
                 f"Direct them to REI customer service at {_SUPPORT_URL} or {_SUPPORT_PHONE} "
                 f"as your first priority."
             )
-        else:
+        elif support_status == "resolved":
             parts.append(
                 "\nNOTE: The customer mentioned a support issue that is already resolved. "
                 "Briefly acknowledge it and move on — do not dwell on it."
             )
+        # abandoned: customer explicitly dropped the issue — say nothing about support
 
     # Secondary intent — behaviour depends on secondary_intent_type:
     #   ambiguous → ask a clarifying question (don't assume which intent the customer wanted)
     #   compound  → address both intents in the same response
+    #
+    # Suppression rules:
+    #   - Suppress ambiguous pivot when primary is support_request AND support is active or
+    #     escalated. The user is dealing with a real problem; guessing they also want gear
+    #     recommendations is tone-deaf.
+    #   - Suppress compound pivot only when support is escalated (user is frustrated).
+    #     Keep compound when support is merely active — the user explicitly asked for both.
     if secondary_intent:
-        if secondary_intent_type == "ambiguous":
+        _support_is_tense = (intent == "support_request" and support_status in ("active", "escalated"))
+        if secondary_intent_type == "ambiguous" and not _support_is_tense:
             parts.append("\n" + _AMBIGUOUS_INTENT_BLOCK)
-        elif secondary_intent_type == "compound" and secondary_intent in _SECONDARY_INTENT_BLOCKS:
+        elif (
+            secondary_intent_type == "compound"
+            and support_status != "escalated"
+            and secondary_intent in _SECONDARY_INTENT_BLOCKS
+        ):
             parts.append("\n" + _SECONDARY_INTENT_BLOCKS[secondary_intent])
 
     return "\n".join(parts)
@@ -499,7 +538,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
     intent = state.get("primary_intent")
     secondary_intent: str | None = state.get("secondary_intent")
     secondary_intent_type: str | None = state.get("secondary_intent_type")
-    support_is_active: bool = state.get("support_is_active", True)
+    support_status: str = state.get("support_status", "active")
+    support_handled: bool = state.get("support_handled", False)
     intent_history: list[str] = state.get("intent_history") or []
     context: ExtractedContext | None = state.get("extracted_context")
     products: list[Product] = state.get("retrieved_products") or []
@@ -508,8 +548,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
     user_profile: str | None = state.get("user_profile")
 
     logger.info(
-        "[synthesizer] primary=%s  secondary=%s  secondary_type=%s  support_active=%s  products=%d  confidence=%s",
-        intent, secondary_intent, secondary_intent_type, support_is_active, len(products), confidence,
+        "[synthesizer] primary=%s  secondary=%s  secondary_type=%s  support_status=%s  support_handled=%s  products=%d  confidence=%s",
+        intent, secondary_intent, secondary_intent_type, support_status, support_handled, len(products), confidence,
     )
 
     with stage_span("synthesize", intent=intent or ""):
@@ -555,8 +595,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
 
         if intent == "support_request":
             logger.info(
-                "[synthesizer] case=support_request  active=%s  secondary=%s",
-                support_is_active, secondary_intent,
+                "[synthesizer] case=support_request  status=%s  secondary=%s",
+                support_status, secondary_intent,
             )
 
         # --- Build system prompt ---
@@ -568,7 +608,8 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
             confidence=confidence,
             secondary_intent=secondary_intent,
             secondary_intent_type=secondary_intent_type,
-            support_is_active=support_is_active,
+            support_status=support_status,
+            support_handled=support_handled,
             intent_history=intent_history,
             user_profile=user_profile,
         )
@@ -597,8 +638,14 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
             intent, secondary_intent, secondary_intent_type, disclaimers_applied, len(response), time.perf_counter() - t0,
         )
 
-        return {
+        result = {
             "response": response,
             "disclaimers_applied": disclaimers_applied,
             "messages": [{"role": "assistant", "content": response}],
         }
+        # Mark support as handled after the first time we respond to a support_request.
+        # This prevents the synthesizer from repeating the identical phone/URL redirect
+        # on every subsequent turn where the user is still classified as support_request.
+        if intent == "support_request":
+            result["support_handled"] = True
+        return result

@@ -81,10 +81,18 @@ Example: "Can you recommend a jacket? Also, my last order never arrived." →
   primary_intent=support_request, secondary_intent=product_search
   (support takes priority even though product was mentioned first)
 
-support_is_active:
-  True  — the support issue is current and unresolved ("I need to return this", "my order is missing").
-  False — the support issue is past-tense / already resolved ("I already returned it", "that got sorted").
-  Only meaningful when support_request is one of the intents. Default to True when uncertain.
+support_status:
+  active    — the support issue is current and unresolved ("I need to return this", "my order is missing").
+  resolved  — the support issue is past-tense or already resolved ("I already returned it", "that got sorted").
+  abandoned — the customer explicitly dropped the support issue and does not want to pursue it further
+              ("forget the return", "never mind about that", "I don't want to call or go online").
+  escalated — the customer has explicitly rejected the standard support path (phone number, online URL)
+              and is demanding in-person or alternative help.
+              Examples: "I don't want a phone number", "I want to talk to someone face to face",
+              "stop sending me to a website", "I just want to go into a store".
+              Set this even if the user has not been explicitly told the phone/URL yet — the rejection
+              of online/phone support is itself the signal.
+  Only meaningful when support_request is one of the intents. Default to active when uncertain.
 
 secondary_intent_type — only set when secondary_intent is not null:
   compound  — the customer explicitly asked for BOTH intents and wants both addressed.
@@ -96,7 +104,7 @@ secondary_intent_type — only set when secondary_intent is not null:
               (product_search or general_education? — not obvious from the message alone)
   null      — secondary_intent is null (only one intent detected)
 
-Return primary_intent, secondary_intent (null if only one intent), support_is_active,
+Return primary_intent, secondary_intent (null if only one intent), support_status,
 and secondary_intent_type (null when secondary_intent is null)."""
 
 INTENT_EXAMPLES: list[dict] = [
@@ -105,49 +113,49 @@ INTENT_EXAMPLES: list[dict] = [
         "primary_intent": "product_search",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "What's the difference between down and synthetic insulation?",
         "primary_intent": "general_education",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "I want to return the jacket I bought last week.",
         "primary_intent": "support_request",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "What is the capital of France?",
         "primary_intent": "out_of_scope",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "Hi!",
         "primary_intent": "out_of_scope",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "Can you recommend a good trail running shoe for someone just starting out?",
         "primary_intent": "product_search",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "How do I waterproof my boots at home?",
         "primary_intent": "general_education",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": True,
+        "support_status": "active",
     },
     # compound — user explicitly asked for both actions in the same message
     {
@@ -155,14 +163,14 @@ INTENT_EXAMPLES: list[dict] = [
         "primary_intent": "support_request",
         "secondary_intent": "product_search",
         "secondary_intent_type": "compound",
-        "support_is_active": True,
+        "support_status": "active",
     },
     {
         "message": "I already returned the jacket. Now I want to find a replacement.",
         "primary_intent": "product_search",
         "secondary_intent": None,
         "secondary_intent_type": None,
-        "support_is_active": False,
+        "support_status": "resolved",
     },
     # compound — both intents explicitly requested
     {
@@ -170,7 +178,7 @@ INTENT_EXAMPLES: list[dict] = [
         "primary_intent": "general_education",
         "secondary_intent": "product_search",
         "secondary_intent_type": "compound",
-        "support_is_active": True,
+        "support_status": "active",
     },
     # compound — both intents explicitly requested
     {
@@ -178,7 +186,7 @@ INTENT_EXAMPLES: list[dict] = [
         "primary_intent": "support_request",
         "secondary_intent": "product_search",
         "secondary_intent_type": "compound",
-        "support_is_active": True,
+        "support_status": "active",
     },
     # ambiguous — could be product_search ("show me options") or general_education ("explain to me")
     {
@@ -186,7 +194,7 @@ INTENT_EXAMPLES: list[dict] = [
         "primary_intent": "product_search",
         "secondary_intent": "general_education",
         "secondary_intent_type": "ambiguous",
-        "support_is_active": True,
+        "support_status": "active",
     },
     # ambiguous — could be product_search or general_education; no explicit buy signal
     {
@@ -194,7 +202,31 @@ INTENT_EXAMPLES: list[dict] = [
         "primary_intent": "general_education",
         "secondary_intent": "product_search",
         "secondary_intent_type": "ambiguous",
-        "support_is_active": True,
+        "support_status": "active",
+    },
+    # abandoned — user explicitly drops the support issue mid-conversation
+    {
+        "message": "Forget about the return — I'll deal with it another time. What jackets do you have for ski touring?",
+        "primary_intent": "product_search",
+        "secondary_intent": None,
+        "secondary_intent_type": None,
+        "support_status": "abandoned",
+    },
+    # escalated — user rejects phone/online support, wants in-person help
+    {
+        "message": "I don't want a phone number or a website. I need to talk to an actual person. Can I just come into the store?",
+        "primary_intent": "support_request",
+        "secondary_intent": None,
+        "secondary_intent_type": None,
+        "support_status": "escalated",
+    },
+    # escalated — user explicitly rejects online support path after frustration
+    {
+        "message": "Stop sending me to a website. I want someone face to face who can actually help me.",
+        "primary_intent": "support_request",
+        "secondary_intent": None,
+        "secondary_intent_type": None,
+        "support_status": "escalated",
     },
 ]
 
@@ -221,12 +253,15 @@ class IntentResult(BaseModel):
             "ambiguous — message could be one intent or the other; model is uncertain which single intent applies."
         )
     )
-    support_is_active: bool = Field(
-        default=True,
+    support_status: Literal["active", "resolved", "abandoned", "escalated"] = Field(
+        default="active",
         description=(
-            "True if the support issue is current and unresolved. "
-            "False if the support issue is past-tense or already resolved. "
-            "Only meaningful when support_request is one of the intents."
+            "Status of any support issue in this turn. "
+            "active    — support issue is current and unresolved. "
+            "resolved  — support issue is past-tense or already resolved. "
+            "abandoned — customer explicitly dropped the support issue and does not want to pursue it. "
+            "escalated — customer has explicitly rejected the phone/online support path and wants in-person help. "
+            "Only meaningful when support_request is one of the intents. Default to active when uncertain."
         )
     )
 
@@ -240,7 +275,7 @@ def classify_intent(messages: list[dict], provider: LLMProvider) -> IntentResult
     from bleeding into later turns where the user has clearly moved on.
 
     Returns an IntentResult with primary_intent, secondary_intent,
-    secondary_intent_type, and support_is_active.
+    secondary_intent_type, and support_status.
     primary_intent drives graph routing; secondary_intent flows to the synthesizer.
     Uses the fast model — classification is a lightweight structured task.
     """
@@ -256,7 +291,7 @@ def classify_intent(messages: list[dict], provider: LLMProvider) -> IntentResult
         f'primary_intent: {ex["primary_intent"]}, '
         f'secondary_intent: {ex["secondary_intent"]}, '
         f'secondary_intent_type: {ex.get("secondary_intent_type")}, '
-        f'support_is_active: {ex["support_is_active"]}'
+        f'support_status: {ex["support_status"]}'
         for ex in _examples
     )
     system = _ov("intent_classification_prompt", INTENT_SYSTEM_PROMPT) + f"\n\nExamples:\n{examples_text}"
@@ -547,10 +582,10 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
         primary_intent = intent_result.primary_intent
         secondary_intent = intent_result.secondary_intent
         secondary_intent_type = intent_result.secondary_intent_type
-        support_is_active = intent_result.support_is_active
+        support_status = intent_result.support_status
         logger.info(
-            "[intent] → primary=%s  secondary=%s  secondary_type=%s  support_active=%s  (%.3fs)",
-            primary_intent, secondary_intent, secondary_intent_type, support_is_active, time.perf_counter() - t0,
+            "[intent] → primary=%s  secondary=%s  secondary_type=%s  support_status=%s  (%.3fs)",
+            primary_intent, secondary_intent, secondary_intent_type, support_status, time.perf_counter() - t0,
         )
 
         # Update span metadata so intent fields appear in Langfuse at the span level
@@ -558,7 +593,7 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
             "primary_intent":        primary_intent,
             "secondary_intent":      secondary_intent,
             "secondary_intent_type": secondary_intent_type,
-            "support_is_active":     support_is_active,
+            "support_status":        support_status,
         })
 
         extracted_context: Optional[ExtractedContext] = None
@@ -594,7 +629,7 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
             "primary_intent": primary_intent,
             "secondary_intent": secondary_intent,
             "secondary_intent_type": secondary_intent_type,
-            "support_is_active": support_is_active,
+            "support_status": support_status,
             "intent_history": [primary_intent],  # append reducer merges into history
             "extracted_context": extracted_context,
             "oos_sub_class": oos_sub_class,
