@@ -581,6 +581,7 @@ Build the eval framework in this order — each step unblocks the next and gives
 > ✅ `pipeline/synthesizer.py` — Node 5: persona response + safety disclaimer injection
 > ✅ `pipeline/graph.py` — StateGraph: nodes, conditional routing, checkpointer
 > ✅ `pipeline/agent.py` — entry point: invoke(), get_session_state()
+> ✅ `pipeline/guard.py` — Llama Guard 3 safety pre-filter: check_input() runs before graph.invoke(); fails open on model errors; violation logged, not exposed to user
 > ✅ Catalog re-ingested — 32,680 products, 97% activity_tags, fixed subcategories
 > ✅ Qdrant embedded — 30,464 points in Qdrant Cloud · payload indexes created (`category` keyword, `price_usd` float)
 > ✅ End-to-end smoke test passed (winter camping query → safety disclaimer injected + product recommendation returned)
