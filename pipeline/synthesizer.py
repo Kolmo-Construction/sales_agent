@@ -15,7 +15,7 @@ Handles six cases:
        benign/complex→ gemma2:9b, fuller answer + redirect
        inappropriate → hard-coded rejection, no LLM call
 
-Secondary intent handling (secondary_intent_type):
+Secondary intent handling (intent_relationship_type):
   compound  — both intents were explicitly requested; _SECONDARY_INTENT_BLOCKS instructs
               the synthesizer to address the secondary intent after the primary.
   ambiguous — message could be one intent or the other; _AMBIGUOUS_INTENT_BLOCK instructs
@@ -93,7 +93,7 @@ Your recommendations are:
 If the customer asked a general question (not shopping), answer it helpfully and accurately.
 If the question is outside your expertise or unrelated to outdoor gear, say so politely."""
 
-# Injected when secondary_intent_type == "ambiguous":
+# Injected when intent_relationship_type == "ambiguous":
 # the message could be product_search OR general_education; ask rather than assume.
 _AMBIGUOUS_INTENT_BLOCK = (
     "NOTE: The customer's message is ambiguous — it could mean they want product "
@@ -104,7 +104,7 @@ _AMBIGUOUS_INTENT_BLOCK = (
     "do not ask multiple questions."
 )
 
-# Injected when secondary_intent_type == "compound":
+# Injected when intent_relationship_type == "compound":
 # both intents were explicitly requested; address both in the same response.
 _SECONDARY_INTENT_BLOCKS: dict[str, str] = {
     "product_search": (
@@ -355,7 +355,7 @@ def _build_system_prompt(
     safety_block: str,
     confidence: str | None = None,
     secondary_intent: str | None = None,
-    secondary_intent_type: str | None = None,
+    intent_relationship_type: str | None = None,
     support_status: str = "active",
     support_handled: bool = False,
     intent_history: list[str] | None = None,
@@ -417,7 +417,7 @@ def _build_system_prompt(
             )
         # abandoned: customer explicitly dropped the issue — say nothing about support
 
-    # Secondary intent — behaviour depends on secondary_intent_type:
+    # Secondary intent — behaviour depends on intent_relationship_type:
     #   ambiguous → ask a clarifying question (don't assume which intent the customer wanted)
     #   compound  → address both intents in the same response
     #
@@ -429,10 +429,10 @@ def _build_system_prompt(
     #     Keep compound when support is merely active — the user explicitly asked for both.
     if secondary_intent:
         _support_is_tense = (intent == "support_request" and support_status in ("active", "escalated"))
-        if secondary_intent_type == "ambiguous" and not _support_is_tense:
+        if intent_relationship_type == "ambiguous" and not _support_is_tense:
             parts.append("\n" + _AMBIGUOUS_INTENT_BLOCK)
         elif (
-            secondary_intent_type == "compound"
+            intent_relationship_type == "compound"
             and support_status != "escalated"
             and secondary_intent in _SECONDARY_INTENT_BLOCKS
         ):
@@ -537,7 +537,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
     """
     intent = state.get("primary_intent")
     secondary_intent: str | None = state.get("secondary_intent")
-    secondary_intent_type: str | None = state.get("secondary_intent_type")
+    intent_relationship_type: str | None = state.get("intent_relationship_type")
     support_status: str = state.get("support_status", "active")
     support_handled: bool = state.get("support_handled", False)
     intent_history: list[str] = state.get("intent_history") or []
@@ -549,7 +549,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
 
     logger.info(
         "[synthesizer] primary=%s  secondary=%s  secondary_type=%s  support_status=%s  support_handled=%s  products=%d  confidence=%s",
-        intent, secondary_intent, secondary_intent_type, support_status, support_handled, len(products), confidence,
+        intent, secondary_intent, intent_relationship_type, support_status, support_handled, len(products), confidence,
     )
 
     with stage_span("synthesize", intent=intent or ""):
@@ -607,7 +607,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
             safety_block=safety_block,
             confidence=confidence,
             secondary_intent=secondary_intent,
-            secondary_intent_type=secondary_intent_type,
+            intent_relationship_type=intent_relationship_type,
             support_status=support_status,
             support_handled=support_handled,
             intent_history=intent_history,
@@ -635,7 +635,7 @@ def synthesize(state: AgentState, provider: LLMProvider) -> dict:
         response = result.content.strip()
         logger.info(
             "[synthesizer] case=%s  secondary=%s  secondary_type=%s  disclaimers=%s  response_len=%d  (%.3fs)",
-            intent, secondary_intent, secondary_intent_type, disclaimers_applied, len(response), time.perf_counter() - t0,
+            intent, secondary_intent, intent_relationship_type, disclaimers_applied, len(response), time.perf_counter() - t0,
         )
 
         result = {

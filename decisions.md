@@ -221,12 +221,12 @@ multi-intent turns be handled?
 
 **Constraints imposed on build:**
 > - `IntentResult` schema in `pipeline/intent.py` gains `secondary_intent: Optional[Literal[...]]`,
->   `secondary_intent_type: Optional[Literal["compound", "ambiguous"]]`, and `support_status: Literal["active", "resolved", "abandoned", "escalated"]`.
+>   `intent_relationship_type: Optional[Literal["compound", "ambiguous"]]`, and `support_status: Literal["active", "resolved", "abandoned", "escalated"]`.
 > - `AgentState` gains `support_handled: bool` (default False, set sticky by synthesizer).
 > - `_build_system_prompt` suppresses the ambiguous secondary-intent pivot block when primary is
 >   `support_request` and support is active or escalated. Compound secondary blocks are still honored
 >   when support is merely active (user explicitly asked for both), but suppressed when escalated.
-> - `secondary_intent_type` disambiguates two previously conflated cases:
+> - `intent_relationship_type` disambiguates two previously conflated cases:
 >   - `"compound"` — customer explicitly asked for both intents; both must be fulfilled in the same response.
 >   - `"ambiguous"` — the message could plausibly be one intent or the other; the model is uncertain.
 >     This is the signal for proactive follow-up ("Did you want recommendations, or more information first?").
@@ -236,15 +236,15 @@ multi-intent turns be handled?
 > - `INTENT_SYSTEM_PROMPT` explains the compound/ambiguous distinction with examples for each.
 >   Few-shot examples include both compound and ambiguous cases.
 > - `AgentState` replaces `intent: str | None` with `primary_intent`, `secondary_intent`,
->   `secondary_intent_type`, `support_status`, and `intent_history` (append reducer).
+>   `intent_relationship_type`, `support_status`, and `intent_history` (append reducer).
 > - `route_after_classify` in `pipeline/graph.py` reads `primary_intent` — no other routing change.
 > - When `primary_intent=support_request` and `secondary_intent=product_search`, the product
 >   retrieval pipeline does **not** run (routing is based on primary only). The synthesizer
 >   handles support, then invites the user to follow up with the product question. Full
 >   dual-pipeline execution is a future enhancement.
-> - `synthesize` in `pipeline/synthesizer.py` receives both intents, `secondary_intent_type`,
+> - `synthesize` in `pipeline/synthesizer.py` receives both intents, `intent_relationship_type`,
 >   `support_status`, and `intent_history`; `_build_system_prompt` assembles context-aware instructions.
->   When `secondary_intent_type == "ambiguous"`, the synthesizer appends a clarifying question.
+>   When `intent_relationship_type == "ambiguous"`, the synthesizer appends a clarifying question.
 > - The support response (`_SUPPORT_RESPONSE`) becomes a prompt block rather than a
 >   hardcoded string, so the synthesizer can combine it with a product pivot when secondary
 >   intent is present.

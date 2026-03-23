@@ -112,7 +112,7 @@ def _build_deg_state(scenario: dict) -> dict:
         "messages": [{"role": "user", "content": scenario["query"]}],
         "primary_intent": primary,
         "secondary_intent": scenario.get("expected", {}).get("secondary_intent"),
-        "secondary_intent_type": scenario.get("expected", {}).get("secondary_intent_type"),
+        "intent_relationship_type": scenario.get("expected", {}).get("intent_relationship_type"),
         "support_status": scenario.get("expected", {}).get("support_status", "active"),
         "support_handled": scenario.get("expected", {}).get("support_handled", False),
         "intent_history": [primary],

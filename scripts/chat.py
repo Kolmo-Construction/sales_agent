@@ -55,7 +55,7 @@ def _state_summary(session_id: str) -> str:
     return (
         f"  [state] primary={state.get('primary_intent')} "
         f"secondary={state.get('secondary_intent')} "
-        f"secondary_type={state.get('secondary_intent_type')} "
+        f"secondary_type={state.get('intent_relationship_type')} "
         f"support_status={state.get('support_status')} "
         f"support_handled={state.get('support_handled')} "
         f"confidence={state.get('retrieval_confidence')} "

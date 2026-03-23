@@ -74,7 +74,7 @@ AgentState:
   messages           list[Message]          # full conversation history
   primary_intent          str | None        # product_search | education | support | oos
   secondary_intent        str | None        # second intent in the same turn, if present
-  secondary_intent_type   str | None        # "compound" | "ambiguous" | None
+  intent_relationship_type   str | None        # "compound" | "ambiguous" | None
                                             #   compound  — both intents explicitly requested; both must be fulfilled
                                             #   ambiguous — message could be one intent or the other; model is uncertain
                                             #               used as the proactive follow-up trigger in the synthesizer
@@ -101,7 +101,7 @@ merges the partial update back into the state before passing it to the next node
 (e.g. "my zipper broke — can you help me return it and recommend a replacement?").
 The classifier produces a `primary_intent` that drives graph routing, and an optional
 `secondary_intent` that flows through to the synthesizer. A third field,
-`secondary_intent_type`, disambiguates two cases that require different handling:
+`intent_relationship_type`, disambiguates two cases that require different handling:
 - `"compound"` — the customer explicitly asked for both; the synthesizer addresses both
   in the same response (handle support first, then pivot to the product question).
 - `"ambiguous"` — the message could be one intent or the other; the synthesizer handles
@@ -127,7 +127,7 @@ per turn). A separate `user_summaries` table in PostgreSQL stores compressed ses
 summaries for returning users.
 
 **Synthesizer secondary-intent handling:**
-| `secondary_intent_type` | Synthesizer behaviour |
+| `intent_relationship_type` | Synthesizer behaviour |
 |---|---|
 | `"compound"` | Addresses both intents in the same response via `_SECONDARY_INTENT_BLOCKS` |
 | `"ambiguous"` | Handles primary intent, then closes with a single clarifying question (`_AMBIGUOUS_INTENT_BLOCK`) |
