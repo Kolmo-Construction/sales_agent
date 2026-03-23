@@ -141,6 +141,34 @@ summaries for returning users.
 
 ---
 
+### Node Reference
+
+| # | Name | File | Reads from state | Writes to state | LLM calls |
+|---|---|---|---|---|---|
+| 0 | **guard** (pre-graph) | `pipeline/guard.py` | — (takes raw message, not state) | — (returns response string or passes through) | 1 — `llama-guard3:latest` |
+| 1 | **classify_and_extract** | `pipeline/intent.py` | `messages` (last `INTENT_CONTEXT_WINDOW=6`) | `primary_intent`, `secondary_intent`, `intent_relationship_type`, `support_status`, `intent_history`, `extracted_context`, `oos_sub_class`, `oos_complexity` | 1–2 — intent classifier (`llama3.2`) + optional context extractor (`gemma2:9b`) or OOS sub-classifier (`llama3.2`) |
+| 2a | **check_completeness** (conditional edge) | `pipeline/graph.py` | `primary_intent`, `extracted_context` | nothing — routing only | 0 |
+| 2b | **ask_followup** | `pipeline/graph.py` | `extracted_context`, `messages` | `response`, `messages` (appends assistant question) | 1 — `llama3.2` |
+| 3 | **translate_specs** | `pipeline/translator.py` | `extracted_context` | `translated_specs` | 0–1 — ontology lookup first; LLM fallback (`gemma2:9b`) only when ontology has no match |
+| 4 | **retrieve** | `pipeline/retriever.py` | `translated_specs` | `retrieved_products`, `retrieval_confidence` | 0 — embedding only (`FastEmbed`), no LLM |
+| 5 | **synthesize** | `pipeline/synthesizer.py` | `primary_intent`, `secondary_intent`, `intent_relationship_type`, `support_status`, `support_handled`, `extracted_context`, `retrieved_products`, `retrieval_confidence`, `oos_sub_class`, `oos_complexity`, `intent_history`, `user_profile` | `response`, `disclaimers_applied`, `messages` (appends assistant response), `support_handled` | 1 — `gemma2:9b` (or `llama3.2` for simple/social OOS); 0 for `inappropriate` OOS (hard-coded) |
+
+**Routing logic (check_completeness):**
+- `primary_intent != product_search` → **synthesize** (education, support, OOS all go straight to synthesis)
+- `primary_intent == product_search` + context incomplete → **ask_followup** → END (await next turn)
+- `primary_intent == product_search` + context complete → **translate_specs** → retrieve → synthesize
+
+**LLM call budget per turn:**
+
+| Path | Calls | Models |
+|---|---|---|
+| Guard blocks (unsafe) | 1 | llama-guard3 |
+| OOS / support / education | 2 | llama-guard3 + llama3.2 |
+| Product search, incomplete context | 3 | llama-guard3 + llama3.2 (intent) + llama3.2 (followup) |
+| Product search, complete context | 3–4 | llama-guard3 + llama3.2 (intent) + gemma2:9b (extract) + optional ontology fallback + gemma2:9b (synthesize) |
+
+---
+
 ## 3. Evaluation Framework
 
 ### 3.1 What to Measure — Per Stage
@@ -343,10 +371,13 @@ sales_agent/
 │   ├── state.py                         # AgentState TypedDict — shared state contract for all nodes
 │   ├── graph.py                         # LangGraph StateGraph definition — nodes, edges, checkpointer
 │   ├── agent.py                         # Entry point — compiles graph, exposes invoke() for the API
-│   ├── intent.py                        # Node 1: intent classification + context extraction
-│   ├── translator.py                    # Node 3: NL → product specs via ontology + LLM fallback
-│   ├── retriever.py                     # Node 4: hybrid sparse+dense search against Qdrant
-│   └── synthesizer.py                   # Node 5: final response generation
+│   ├── guard.py                         # Pre-graph: Llama Guard 3 input safety filter (runs in agent.py before graph)
+│   ├── intent.py                        # Node 1: classify_and_extract — intent classification + context extraction + OOS sub-classification
+│   ├── graph.py                         # Node 2 (check_completeness) + ask_followup — routing logic and follow-up generation live here
+│   │                                    # check_completeness is a conditional edge (reads state, no writes); ask_followup is a lightweight node
+│   ├── translator.py                    # Node 3: translate_specs — NL context → product spec query via ontology + LLM fallback
+│   ├── retriever.py                     # Node 4: retrieve — hybrid BM25 + semantic search against Qdrant, RRF fusion
+│   └── synthesizer.py                   # Node 5: synthesize — persona-consistent, grounded, safety-aware response generation
 │
 ├── data/
 │   ├── catalog/                         # Product catalog (source of truth for factual checks)
