@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 from pipeline.embeddings import default_provider as default_embedding_provider
 from pipeline.graph import build_graph
+from pipeline.guard import UNSAFE_RESPONSE, check_input
 from pipeline.llm import default_provider as default_llm_provider
 from pipeline.state import AgentState, initial_state
 from pipeline.tracing import new_trace, reset_trace, set_trace, tracer
@@ -121,6 +122,12 @@ def invoke(session_id: str, user_message: str) -> str:
         # The messages reducer in AgentState appends rather than replaces
         input_data = {"messages": [{"role": "user", "content": user_message}]}
 
+    # --- Safety pre-filter (Llama Guard 3) ---
+    # Runs before the graph — unsafe inputs never reach the pipeline.
+    guard = check_input(user_message)
+    if not guard.safe:
+        return UNSAFE_RESPONSE
+
     trace = new_trace(session_id=session_id, user_message=user_message)
     token = set_trace(trace)
     try:
@@ -130,21 +137,21 @@ def invoke(session_id: str, user_message: str) -> str:
         # Extract intent fields for logging and tracing
         primary        = result.get("primary_intent")
         secondary      = result.get("secondary_intent")
-        support_active = result.get("support_is_active")
+        support_status = result.get("support_status", "active")
         history        = result.get("intent_history") or []
 
         logger.info(
-            "[turn] session=%s primary=%s secondary=%s support_active=%s history=%s",
-            session_id[:8], primary, secondary, support_active, history,
+            "[turn] session=%s primary=%s secondary=%s support_status=%s history=%s",
+            session_id[:8], primary, secondary, support_status, history,
         )
 
         trace.update(
             output=response,
             metadata={
-                "primary_intent":    primary,
-                "secondary_intent":  secondary,
-                "support_is_active": support_active,
-                "intent_history":    history,
+                "primary_intent":   primary,
+                "secondary_intent": secondary,
+                "support_status":   support_status,
+                "intent_history":   history,
             },
         )
         return response

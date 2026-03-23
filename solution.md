@@ -30,16 +30,42 @@ agent state at every node transition via `langgraph-checkpoint-postgres`, enabli
 multi-turn conversations to resume across requests.
 
 ```
-START
-  └→ [1] classify_and_extract      (intent class + structured context)
-       └→ [2] check_completeness   (conditional edge)
-              ├→ incomplete: ask_followup → END (await next user turn)
-              └→ complete:
-                   └→ [3] translate_specs    (NL → product spec query via ontology + LLM)
-                        └→ [4] retrieve       (hybrid BM25 + semantic search, Qdrant)
-                             └→ [5] synthesize (persona-consistent, grounded, safety-aware)
-                                  └→ END
+user message
+  └→ [0] llama-guard3              (safety pre-filter — runs before the graph)
+          ├→ unsafe: hard rejection → END  (pipeline never executes)
+          └→ safe:
+               └→ [1] classify_and_extract      (intent class + structured context)
+                    └→ [2] check_completeness   (conditional edge)
+                           ├→ incomplete: ask_followup → END (await next user turn)
+                           └→ complete:
+                                └→ [3] translate_specs    (NL → product spec query via ontology + LLM)
+                                     └→ [4] retrieve       (hybrid BM25 + semantic search, Qdrant)
+                                          └→ [5] synthesize (persona-consistent, grounded, safety-aware)
+                                               └→ END
 ```
+
+**Safety pre-filter (`pipeline/guard.py`):** Llama Guard 3 (`llama-guard3:latest`, 4.9 GB local)
+screens every user message before the graph runs. It classifies against 13 harm categories
+(S1–S13: violent crimes, hate speech, CBRN weapons, self-harm, jailbreaks, etc.) and
+returns `safe` or `unsafe\n<code>`. Unsafe messages receive a hard-coded generic rejection —
+the violation category is logged but never exposed to the user. The guard fails open
+(allows traffic through) if the model is unavailable, so an Ollama restart does not block
+legitimate users. Input-only screening; output screening is handled by the synthesizer's
+SAFETY REQUIREMENT blocks and the `test_safety.py` eval gate.
+
+**Future consideration — two-layer guard (Meta LlamaFirewall pattern):**
+Meta's production stack runs two guards in sequence rather than one:
+1. **Llama Prompt Guard 2** (22M or 86M parameters, BERT-class encoder) — input-only,
+   narrowly focused on prompt injection and jailbreak detection. Runs in milliseconds.
+   Not an Ollama model (encoder-only architecture); called directly via Hugging Face
+   `transformers`. Complements Llama Guard rather than replacing it.
+2. **Llama Guard** — content classification on both input and output (S1–S13 harm categories).
+
+The pattern is: PromptGuard catches adversarial *attacks* (injection, jailbreak attempts);
+Llama Guard catches harmful *content* (violence, hate, CSAM, etc.). For the current retail
+use case a single Llama Guard 3 8B on input is sufficient. If production logs show
+adversarial injection attempts, add `meta-llama/Llama-Prompt-Guard-2-22M` from Hugging Face
+as a first-pass filter before Llama Guard.
 
 **LangGraph state object** (`pipeline/state.py`):
 ```
@@ -129,14 +155,26 @@ summaries for returning users.
 | OOS sub-class accuracy | No (track trend) | `evals/datasets/oos_subclass/golden.jsonl` (32 examples); social/benign/inappropriate + complexity |
 | Priority hierarchy respected | Yes | `support_request` must never be assigned as secondary when it should be primary |
 | Secondary intent detection accuracy | Yes (≥ 0.75) | Multi-intent labeled examples only; lower floor — a miss doesn't break routing |
-| `support_is_active` accuracy | No (track trend) | Whether the classifier correctly detects past-tense vs. active support issues |
+| `support_status` accuracy | No (track trend) | Whether the classifier correctly detects active / resolved / abandoned / escalated support issues |
 
 Intent classes: `product_search`, `general_education`, `support_request`, `out_of_scope`
 
 **Multi-intent classification:** The classifier produces `primary_intent` (drives routing)
 and `secondary_intent` (optional, flows to synthesizer). `primary_intent` is assigned by
 priority hierarchy (support > education > product > oos), not by order of mention.
-`support_is_active` distinguishes active from past-tense support issues.
+`support_status` (`"active"` / `"resolved"` / `"abandoned"` / `"escalated"`) controls synthesizer framing:
+active → direct to phone/URL; resolved → briefly acknowledge; abandoned → ignore; escalated → store locator only.
+`support_handled: bool` prevents the synthesizer from repeating the same redirect verbatim on subsequent turns.
+
+**Intent context window (`INTENT_CONTEXT_WINDOW = 6`):** The classifier receives only the
+last 6 messages (3 user/assistant exchanges), not the full conversation history. Without
+this window, a high-priority intent from an early turn — most commonly a `support_request`
+— bleeds into later turns where the user has clearly moved on. Because the priority
+hierarchy always elevates support above product search, the classifier would keep
+re-assigning `support_request` as primary on every subsequent turn, regardless of what
+the user was actually asking. The window keeps classification grounded in what the user
+wants *now*. `intent_history` (full append list) is kept separately so the synthesizer
+can still acknowledge the arc of the whole conversation.
 
 Dataset schema for multi-intent examples:
 ```json
@@ -144,11 +182,11 @@ Dataset schema for multi-intent examples:
   "query": "...",
   "expected_intent": "support_request",
   "expected_secondary_intent": "product_search",
-  "expected_support_is_active": true,
+  "expected_support_status": "active",
   "notes": "..."
 }
 ```
-Single-intent examples omit `expected_secondary_intent` (null) and `expected_support_is_active`
+Single-intent examples omit `expected_secondary_intent` (null) and `expected_support_status`
 (test skips those fields). This keeps the dataset backward-compatible.
 
 **OOS sub-classification accuracy** is evaluated via `evals/datasets/oos_subclass/golden.jsonl`

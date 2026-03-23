@@ -33,6 +33,7 @@ Required credentials (in `.env`):
 LLM_PROVIDER=ollama                         # ollama | outlines
 LLM_MODEL=gemma2:9b                         # primary model — synthesis, translation, judges
 LLM_FAST_MODEL=llama3.2:latest              # fast model — intent classification, simple tasks
+GUARD_MODEL=llama-guard3:latest             # safety pre-filter — screens every input before graph runs
 OLLAMA_HOST=http://localhost:11434           # Ollama server (default)
 # OUTLINES_GGUF_PATH=                       # only needed when LLM_PROVIDER=outlines
 #   Find path: ollama show gemma2:9b --modelfile | grep FROM
@@ -56,8 +57,9 @@ FEEDBACK_ROUND=                     # leave blank to omit round tagging
 ```
 
 **LLM provider:** This project uses `LLM_PROVIDER=ollama` only.
-`gemma2:9b` for synthesis/translation/judges, `llama3.2:latest` for fast classification tasks.
-Both models must be pulled locally: `ollama pull gemma2:9b && ollama pull llama3.2`.
+`gemma2:9b` for synthesis/translation/judges, `llama3.2:latest` for fast classification tasks,
+`llama-guard3:latest` as the safety pre-filter. All three must be pulled locally:
+`ollama pull gemma2:9b && ollama pull llama3.2 && ollama pull llama-guard3`.
 
 **Qdrant Cloud (no Docker required):**
 Sign up free at cloud.qdrant.io. Create a cluster, then set `QDRANT_URL` to the cluster
@@ -84,6 +86,7 @@ pip install -r requirements.txt
 # Pull Ollama models (must have Ollama installed: https://ollama.com)
 ollama pull gemma2:9b
 ollama pull llama3.2
+ollama pull llama-guard3   # safety pre-filter
 
 # Environment variables
 cp .env.example .env
@@ -468,6 +471,7 @@ docker-compose up -d
 # Pull required LLM models into the Ollama container
 docker-compose exec ollama ollama pull gemma2:9b
 docker-compose exec ollama ollama pull llama3.2
+docker-compose exec ollama ollama pull llama-guard3
 
 # Open MLflow UI (experiment tracking, Pareto run comparison)
 open http://localhost:5000
