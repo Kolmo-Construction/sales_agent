@@ -237,11 +237,14 @@ multi-intent turns be handled?
 >   Few-shot examples include both compound and ambiguous cases.
 > - `AgentState` replaces `intent: str | None` with `primary_intent`, `secondary_intent`,
 >   `intent_relationship_type`, `support_status`, and `intent_history` (append reducer).
-> - `route_after_classify` in `pipeline/graph.py` reads `primary_intent` — no other routing change.
-> - When `primary_intent=support_request` and `secondary_intent=product_search`, the product
->   retrieval pipeline does **not** run (routing is based on primary only). The synthesizer
->   handles support, then invites the user to follow up with the product question. Full
->   dual-pipeline execution is a future enhancement.
+> - `route_after_classify` in `pipeline/graph.py` reads `primary_intent` as the main routing
+>   signal, with an additional compound-secondary branch (see below).
+> - **Dual-pipeline (implemented):** When `primary_intent` is non-product-search and
+>   `secondary_intent=product_search` with `intent_relationship_type="compound"` and complete
+>   context (and support not escalated), `route_after_classify` now routes to
+>   `translate_specs → retrieve → synthesize`. `extract_context` was extended to also run
+>   on compound turns where the secondary intent is `product_search`. The synthesizer
+>   receives retrieved products and makes a full recommendation alongside the primary response.
 > - `synthesize` in `pipeline/synthesizer.py` receives both intents, `intent_relationship_type`,
 >   `support_status`, and `intent_history`; `_build_system_prompt` assembles context-aware instructions.
 >   When `intent_relationship_type == "ambiguous"`, the synthesizer appends a clarifying question.

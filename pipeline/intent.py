@@ -2,10 +2,11 @@
 Node 1: classify_and_extract
 
 LLM calls per turn (varies by intent):
-  product_search   → 2 calls: classify_intent() [fast] + extract_context() [primary]
-  general_education
-  support_request  → 1 call:  classify_intent() [fast]
-  out_of_scope     → 2 calls: classify_intent() [fast] + classify_oos_subtype() [fast]
+  product_search                            → 2 calls: classify_intent() [fast] + extract_context() [primary]
+  compound (non-product primary + product_search secondary, complete context)
+                                            → 2 calls: classify_intent() [fast] + extract_context() [primary]
+  general_education / support_request       → 1 call:  classify_intent() [fast]
+  out_of_scope                              → 2 calls: classify_intent() [fast] + classify_oos_subtype() [fast]
 
 Returns a partial AgentState update:
   {"intent", "extracted_context", "oos_sub_class", "oos_complexity"}
@@ -565,7 +566,9 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
     LangGraph node: classify intent, extract context, and sub-classify OOS messages.
 
     Always runs on every turn. Secondary calls are conditional:
-      - extract_context()       only when intent == "product_search"
+      - extract_context()       when intent == "product_search" OR when
+                                secondary_intent == "product_search" and
+                                intent_relationship_type == "compound" (dual-pipeline path)
       - classify_oos_subtype()  only when intent == "out_of_scope"
 
     Returns a partial AgentState dict with intent, extracted_context,
@@ -597,7 +600,11 @@ def classify_and_extract(state: AgentState, provider: LLMProvider) -> dict:
         })
 
         extracted_context: Optional[ExtractedContext] = None
-        if primary_intent == "product_search":
+        _needs_extraction = primary_intent == "product_search" or (
+            secondary_intent == "product_search"
+            and intent_relationship_type == "compound"
+        )
+        if _needs_extraction:
             t1 = time.perf_counter()
             extracted_context = extract_context(messages, provider)
             logger.info(

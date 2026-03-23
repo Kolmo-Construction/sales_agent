@@ -122,20 +122,36 @@ def route_after_classify(
     """
     Conditional edge — runs after classify_and_extract.
 
-    Routing is driven by primary_intent only. secondary_intent flows to the
-    synthesizer as context but does not affect which graph path is taken.
+    Primary routing is driven by primary_intent. When a compound secondary
+    product_search intent is present with complete context, the product pipeline
+    also runs (dual-pipeline path) regardless of the primary intent.
 
     Routes to:
-      synthesize      — non-product-search primary intents (education, support, oos)
+      synthesize      — non-product-search primary; no actionable compound secondary
       ask_followup    — product_search primary but required context fields are missing
-      translate_specs — product_search primary with enough context to proceed
+      translate_specs — product_search primary with complete context, OR compound
+                        secondary product_search with complete context (dual-pipeline)
     """
     intent = state.get("primary_intent")
+    secondary_intent = state.get("secondary_intent")
+    intent_relationship_type = state.get("intent_relationship_type")
 
     if intent != "product_search":
+        # Compound secondary product intent with complete context → run the product
+        # pipeline so the synthesizer gets real products for its recommendation.
+        # Skipped when support is escalated: user is frustrated; a product pivot
+        # is tone-deaf and the synthesizer suppresses it anyway.
+        if (
+            secondary_intent == "product_search"
+            and intent_relationship_type == "compound"
+            and state.get("support_status") != "escalated"
+        ):
+            context: ExtractedContext | None = state.get("extracted_context")
+            if context is not None and context.required_fields_present:
+                return "translate_specs"
         return "synthesize"
 
-    context: ExtractedContext | None = state.get("extracted_context")
+    context = state.get("extracted_context")
     if context is not None and context.required_fields_present:
         return "translate_specs"
 

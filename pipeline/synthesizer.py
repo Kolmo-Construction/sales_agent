@@ -397,6 +397,22 @@ def _build_system_prompt(
                 "exact matches. Do not invent products outside this list."
             )
 
+    elif (
+        secondary_intent == "product_search"
+        and intent_relationship_type == "compound"
+        and products
+    ):
+        # Dual-pipeline path: primary intent is not product_search, but the routing
+        # layer ran translate_specs → retrieve and products are in state.
+        # Inject the product list here so the synthesizer can make a real recommendation
+        # for the secondary intent instead of just inviting a follow-up.
+        parts.append("\n" + _format_products(products))
+        if confidence == "close":
+            parts.append(
+                "\nNOTE: The catalog does not contain an exact match for the product request. "
+                "Present the products above as the closest available options. Be upfront about this."
+            )
+
     elif intent == "support_request":
         # Tell the LLM how to frame the support situation based on its current status
         if support_status == "escalated":
@@ -436,7 +452,18 @@ def _build_system_prompt(
             and support_status != "escalated"
             and secondary_intent in _SECONDARY_INTENT_BLOCKS
         ):
-            parts.append("\n" + _SECONDARY_INTENT_BLOCKS[secondary_intent])
+            if secondary_intent == "product_search" and products:
+                # Products were retrieved via the dual-pipeline path — instruct the
+                # synthesizer to make a real recommendation, not just offer to help later.
+                parts.append(
+                    "\nAfter handling the primary topic above, pivot to a specific product "
+                    "recommendation from the retrieved products list. The customer explicitly "
+                    "asked for both — make the recommendation fully, don't just invite a "
+                    "follow-up. Keep the transition natural, e.g. "
+                    "'While we sort that out, here's what I'd suggest for your trip…'"
+                )
+            else:
+                parts.append("\n" + _SECONDARY_INTENT_BLOCKS[secondary_intent])
 
     return "\n".join(parts)
 

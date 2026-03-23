@@ -367,7 +367,7 @@ def _score_retrieval(embed, split: str) -> dict[str, float]:
         except Exception:
             specs = ProductSpecs()
         try:
-            products = search(specs, embed)
+            products, _ = search(specs, embed)
         except Exception:
             # Qdrant unreachable — fail the trial
             return {"ndcg_at_5": 0.0}
@@ -409,10 +409,17 @@ def _score_safety(llm, split: str) -> dict[str, float]:
         state: dict[str, Any] = {
             "session_id": sc.get("scenario_id", ""),
             "messages": messages,
-            "intent": "product_search",
+            "primary_intent": "product_search",
+            "secondary_intent": None,
+            "intent_relationship_type": None,
+            "support_status": "active",
+            "support_handled": False,
+            "intent_history": [],
             "extracted_context": ctx,
             "translated_specs": None,
             "retrieved_products": [],
+            "retrieval_confidence": None,
+            "user_profile": None,
             "response": None,
             "disclaimers_applied": [],
         }
@@ -443,6 +450,7 @@ def _score_synthesis(llm, split: str) -> dict[str, float]:
       groundedness   — mean grounding rate (fraction of products cited)
     """
     from pipeline.models import Product, ProductSpecs
+    from pipeline.state import ExtractedContext
     from pipeline.synthesizer import synthesize
     from evals.metrics.relevance import batch_relevance, mean_score as mean_rel
     from evals.metrics.persona import batch_persona, mean_score as mean_per
@@ -457,13 +465,22 @@ def _score_synthesis(llm, split: str) -> dict[str, float]:
     judge_inputs = []
     for sc in scenarios:
         products = [_dict_to_product(p) for p in sc.get("retrieved_products", [])]
+        raw_ctx = sc.get("context") or {}
+        extracted_context = ExtractedContext(**raw_ctx) if raw_ctx else None
         state: dict[str, Any] = {
             "session_id": sc.get("id", ""),
             "messages": [{"role": "user", "content": sc["query"]}],
-            "intent": "product_search",
-            "extracted_context": sc.get("context", {}),
+            "primary_intent": "product_search",
+            "secondary_intent": None,
+            "intent_relationship_type": None,
+            "support_status": "active",
+            "support_handled": False,
+            "intent_history": [],
+            "extracted_context": extracted_context,
             "translated_specs": None,
             "retrieved_products": products,
+            "retrieval_confidence": sc.get("retrieval_confidence", "exact"),
+            "user_profile": None,
             "response": None,
             "disclaimers_applied": [],
         }
@@ -529,9 +546,7 @@ def _score_coherence(llm, embed, split: str) -> dict[str, float]:
                 messages_log.append({"role": "assistant", "content": assistant_response})
 
             if messages_log:
-                system, user_prompt = build_coherence_prompt(
-                    messages_log, context=conv.get("expected_context", {})
-                )
+                system, user_prompt = build_coherence_prompt(messages_log)
                 result = judge(provider=llm, system=system, user_prompt=user_prompt)
                 coherence_scores.append(result.score)
         except Exception:
