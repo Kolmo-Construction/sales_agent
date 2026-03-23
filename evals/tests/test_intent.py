@@ -67,9 +67,9 @@ def _run_predictions(examples: list[dict], llm_provider) -> list[dict]:
                 # Secondary intent — new; only present on multi-intent examples
                 "expected_secondary": ex.get("expected_secondary_intent"),
                 "predicted_secondary": result.secondary_intent,
-                # support_is_active — only meaningful when support_request is involved
-                "expected_support_active": ex.get("expected_support_is_active"),
-                "predicted_support_active": result.support_is_active,
+                # support_status — only meaningful when support_request is involved
+                "expected_support_status": ex.get("expected_support_status"),
+                "predicted_support_status": result.support_status,
                 "notes": ex.get("notes", ""),
             }
         )
@@ -182,8 +182,8 @@ def test_edge_misclassifications(edge_predictions):
 # Lower than primary — secondary is harder; a miss doesn't break routing.
 SECONDARY_INTENT_ACCURACY_FLOOR = 0.75
 
-# Accuracy floor for support_is_active classification.
-SUPPORT_ACTIVE_ACCURACY_FLOOR = 0.80
+# Accuracy floor for support_status classification.
+SUPPORT_STATUS_ACCURACY_FLOOR = 0.80
 
 
 def _multi_intent_examples(predictions: list[dict]) -> list[dict]:
@@ -192,8 +192,8 @@ def _multi_intent_examples(predictions: list[dict]) -> list[dict]:
 
 
 def _support_intent_examples(predictions: list[dict]) -> list[dict]:
-    """Filter to examples where support_is_active has a labeled expectation."""
-    return [r for r in predictions if r["expected_support_active"] is not None]
+    """Filter to examples where support_status has a labeled expectation."""
+    return [r for r in predictions if r["expected_support_status"] is not None]
 
 
 def test_secondary_intent_detection_accuracy(golden_predictions, edge_predictions):
@@ -257,33 +257,33 @@ def test_priority_hierarchy_respected(golden_predictions, edge_predictions):
     )
 
 
-def test_support_is_active_accuracy(golden_predictions, edge_predictions):
+def test_support_status_accuracy(golden_predictions, edge_predictions):
     """
-    INFORMATIONAL: support_is_active classification accuracy on labeled examples.
+    INFORMATIONAL: support_status classification accuracy on labeled examples.
 
-    Does not gate — prints results for monitoring. support_is_active only affects
+    Does not gate — prints results for monitoring. support_status only affects
     synthesizer framing, not routing. Promote to a gate once baseline is established.
     """
     all_preds = golden_predictions + edge_predictions
     support_examples = _support_intent_examples(all_preds)
 
     if not support_examples:
-        pytest.skip("No support_is_active labeled examples in dataset")
+        pytest.skip("No support_status labeled examples in dataset")
 
     correct = sum(
         1 for r in support_examples
-        if r["predicted_support_active"] == r["expected_support_active"]
+        if r["predicted_support_status"] == r["expected_support_status"]
     )
     acc = correct / len(support_examples)
 
-    print(f"\nsupport_is_active accuracy: {acc:.3f}  (floor: {SUPPORT_ACTIVE_ACCURACY_FLOOR})")
+    print(f"\nsupport_status accuracy: {acc:.3f}  (floor: {SUPPORT_STATUS_ACCURACY_FLOOR})")
     print(f"Support examples evaluated: {len(support_examples)}")
 
-    misses = [r for r in support_examples if r["predicted_support_active"] != r["expected_support_active"]]
+    misses = [r for r in support_examples if r["predicted_support_status"] != r["expected_support_status"]]
     if misses:
         print(f"Misses ({len(misses)}):")
         for r in misses:
             print(
-                f"  expected={r['expected_support_active']}  "
-                f"predicted={r['predicted_support_active']} | {r['query'][:70]}"
+                f"  expected={r['expected_support_status']}  "
+                f"predicted={r['predicted_support_status']} | {r['query'][:70]}"
             )

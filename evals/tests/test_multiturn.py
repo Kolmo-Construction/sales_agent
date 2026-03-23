@@ -40,6 +40,9 @@ from evals.metrics.multiturn import (
     oos_benign_check,
     repeated_question_check,
     single_followup_check,
+    support_no_phone_url_check,
+    support_pivot_absent_check,
+    support_store_locator_check,
     zero_result_check,
 )
 from evals.judges.prompts import build_coherence_prompt
@@ -109,7 +112,9 @@ def _build_deg_state(scenario: dict) -> dict:
         "messages": [{"role": "user", "content": scenario["query"]}],
         "primary_intent": primary,
         "secondary_intent": scenario.get("expected", {}).get("secondary_intent"),
-        "support_is_active": scenario.get("expected", {}).get("support_is_active", True),
+        "secondary_intent_type": scenario.get("expected", {}).get("secondary_intent_type"),
+        "support_status": scenario.get("expected", {}).get("support_status", "active"),
+        "support_handled": scenario.get("expected", {}).get("support_handled", False),
         "intent_history": [primary],
         "extracted_context": ExtractedContext(**ctx) if ctx else None,
         "translated_specs": None,
@@ -187,11 +192,21 @@ def degradation_results(
     Returns a list of dicts:
       {scenario: <dataset record>, state: <final state dict or None>}
     """
+    # Scenario types that bypass graph.invoke() and call synthesize() directly.
+    # Used when: (a) no Qdrant needed, and (b) pre-built state values must be preserved
+    # (e.g. support_handled=True for repeat-redirect scenarios).
+    _DIRECT_SYNTH_TYPES = frozenset({
+        "zero_results",
+        "support_escalated",
+        "support_repeat_redirect",
+        "pivot_suppressed_active_support",
+    })
+
     results = []
     for scenario in degradation_scenarios:
         sid = scenario["scenario_id"]
 
-        if scenario["type"] == "zero_results":
+        if scenario["type"] in _DIRECT_SYNTH_TYPES:
             # Call synthesize() directly — no graph, no Qdrant.
             built_state = _build_deg_state(scenario)
             state = synthesize(built_state, llm_provider)
@@ -730,6 +745,76 @@ def test_resolved_support_routes_to_product(degradation_results):
     assert not leads_with_support, (
         f"deg015: response leads with support redirect even though issue is resolved.\n"
         f"Response start: {response_start}"
+    )
+
+
+def test_escalated_support_offers_store_not_phone(degradation_results):
+    """
+    GATE: When support_status=escalated the response must offer the store locator
+    and must NOT contain the phone number or online help URL.
+
+    deg016 — customer explicitly rejects phone/website, wants in-person help.
+    """
+    rec = _get_deg(degradation_results, "deg016")
+    if rec is None or rec["state"] is None:
+        pytest.skip("deg016 result unavailable")
+
+    response = _response_text(rec["state"])
+
+    assert support_store_locator_check(response), (
+        f"deg016: escalated response did not mention store/in-person option.\n"
+        f"Response: {response[:300]}"
+    )
+    assert support_no_phone_url_check(response), (
+        f"deg016: escalated response still contains phone number or help URL "
+        f"after customer explicitly rejected that path.\nResponse: {response[:300]}"
+    )
+
+
+def test_repeat_support_offers_store_alternative(degradation_results):
+    """
+    GATE: When support_handled=True and support_status=active the response must offer
+    the in-store alternative rather than repeating the same phone/URL redirect.
+
+    deg017 — customer tried calling but couldn't get through; agent already gave
+    contact info on a prior turn (support_handled=True in pre-built state).
+    """
+    rec = _get_deg(degradation_results, "deg017")
+    if rec is None or rec["state"] is None:
+        pytest.skip("deg017 result unavailable")
+
+    response = _response_text(rec["state"])
+
+    assert support_store_locator_check(response), (
+        f"deg017: repeat-support response did not offer in-store alternative.\n"
+        f"Response: {response[:300]}"
+    )
+
+
+def test_active_support_suppresses_product_pivot(degradation_results):
+    """
+    GATE: When primary_intent=support_request and support_status=active the synthesizer
+    must NOT append a product slot-filling question (pivot suppression).
+
+    deg018 — missing order + ambiguous sleeping-bag mention.
+    The response must handle the support issue and must not add a gear question.
+    """
+    rec = _get_deg(degradation_results, "deg018")
+    if rec is None or rec["state"] is None:
+        pytest.skip("deg018 result unavailable")
+
+    response = _response_text(rec["state"])
+
+    # Contact info must still be present (support is the primary)
+    has_contact = any(kw in response.lower() for kw in _REI_CONTACT_KEYWORDS)
+    assert has_contact, (
+        f"deg018: support response missing contact info.\nResponse: {response[:300]}"
+    )
+
+    assert support_pivot_absent_check(response), (
+        f"deg018: support response appended a product pivot/slot-filling question "
+        f"despite active support_status — pivot should be suppressed.\n"
+        f"Response: {response[:300]}"
     )
 
 

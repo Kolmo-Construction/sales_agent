@@ -19,6 +19,9 @@ oos_benign_check(response)              — substantive content + redirect, no p
                                           Use for: benign OOS (factual questions)
 zero_result_check(response, products)   — no invented product when retrieved_products=[]
 contradictory_flag(response, budget)    — budget-conflict language present in response
+support_store_locator_check(response)   — store locator language present (escalated path)
+support_no_phone_url_check(response)    — phone number and online URL absent (escalated path)
+support_pivot_absent_check(response)    — no product-pivot appended (pivot suppression)
 """
 
 from __future__ import annotations
@@ -308,6 +311,71 @@ _BUDGET_CONFLICT_PHRASES: tuple[str, ...] = (
     "pricier",
     "higher-end",
 )
+
+
+_STORE_LOCATOR_PHRASES: tuple[str, ...] = (
+    "rei.com/stores",
+    "store locator",
+    "nearest rei",
+    "local rei",
+    "find a store",
+    "visit a store",
+    "come into",
+    "come in to",
+    "in person",
+    "in-person",
+    "stop by",
+    "our store",
+)
+
+_PHONE_URL_MARKERS: tuple[str, ...] = (
+    "1-800",
+    "rei.com/help",
+    "help center",
+)
+
+_PRODUCT_PIVOT_PHRASES: tuple[str, ...] = (
+    "sleeping bag",
+    "what temperatures",
+    "what kind of",
+    "what conditions",
+    "what activity",
+    "tell me more about",
+    "looking for gear",
+    "happy to help you find",
+    "would you like a recommendation",
+)
+
+
+def support_store_locator_check(response: str) -> bool:
+    """Return True if the response contains store-locator or in-person language.
+
+    Used to verify the escalated support path: when a customer rejects phone/online
+    support, the agent must offer the in-store option.
+    """
+    lower = response.lower()
+    return any(phrase in lower for phrase in _STORE_LOCATOR_PHRASES)
+
+
+def support_no_phone_url_check(response: str) -> bool:
+    """Return True if the response does NOT contain the standard phone/URL markers.
+
+    Used to verify the escalated support path: the agent must not repeat
+    the phone number or online URL after the customer has explicitly rejected them.
+    """
+    lower = response.lower()
+    return not any(marker in lower for marker in _PHONE_URL_MARKERS)
+
+
+def support_pivot_absent_check(response: str) -> bool:
+    """Return True if the response does NOT append a product-pivot question.
+
+    Used to verify pivot suppression when primary_intent=support_request and
+    support_status is active or escalated — the agent must not add a slot-filling
+    gear question at the end of a support response.
+    """
+    lower = response.lower()
+    return not any(phrase in lower for phrase in _PRODUCT_PIVOT_PHRASES)
 
 
 def contradictory_flag(response: str, budget_usd: float) -> bool:  # noqa: ARG001
